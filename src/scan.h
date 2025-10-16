@@ -34,6 +34,10 @@ namespace cameo
       idx[file_c] = sam_index_load(samfile[file_c], c.files[file_c].string().c_str());
     }
     bam_hdr_t* hdr = sam_hdr_read(samfile[0]);
+
+    // Keep track of avg. coverage
+    typedef boost::accumulators::accumulator_set<double, boost::accumulators::features<boost::accumulators::tag::mean, boost::accumulators::tag::variance> > TAccumulator;
+    std::vector<TAccumulator> acc(c.files.size());
     
     // Parse genome chr-by-chr
     boost::posix_time::ptime now = boost::posix_time::second_clock::local_time();
@@ -99,11 +103,10 @@ namespace cameo
 	hts_itr_destroy(iter);
 	
 	// Summarize coverage for this chromosome
-	boost::accumulators::accumulator_set<double, boost::accumulators::features<boost::accumulators::tag::mean, boost::accumulators::tag::variance> > acc;
-	for(uint32_t i = 0; i < hdr->target_len[refIndex]; ++i) acc(cov[i]);
-	uint32_t sdcov = sqrt(boost::accumulators::variance(acc));
-	uint32_t avgcov = boost::accumulators::mean(acc);
-	std::cerr << c.files[file_c].string() << ", " << hdr->target_name[refIndex] << ", meancov=" << avgcov << ", sdcov=" << sdcov << std::endl;	
+	for(uint32_t i = 0; i < hdr->target_len[refIndex]; ++i) acc[file_c](cov[i]);
+	double sdcov = sqrt(boost::accumulators::variance(acc[file_c]));
+	double avgcov = boost::accumulators::mean(acc[file_c]);
+	std::cerr << c.files[file_c].string() << ", " << hdr->target_name[refIndex] << ", meancov=" << avgcov << ", sdcov=" << sdcov << std::endl;
       }
     }
 

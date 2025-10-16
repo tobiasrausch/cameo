@@ -206,11 +206,11 @@ namespace cameo {
     }
     
     // Show cmd
-    boost::posix_time::ptime now = boost::posix_time::second_clock::local_time();
-    std::cerr << '[' << boost::posix_time::to_simple_string(now) << "] ";
-    std::cerr << "breaktracer ";
-    for(int i=0; i<argc; ++i) { std::cerr << argv[i] << ' '; }
-    std::cerr << std::endl;
+    //boost::posix_time::ptime now = boost::posix_time::second_clock::local_time();
+    //std::cerr << '[' << boost::posix_time::to_simple_string(now) << "] ";
+    //std::cerr << "breaktracer ";
+    //for(int i=0; i<argc; ++i) { std::cerr << argv[i] << ' '; }
+    //std::cerr << std::endl;
    
     return runCameo(c);
   }

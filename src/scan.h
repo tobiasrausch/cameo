@@ -62,7 +62,7 @@ namespace cameo
     
     // Parse genome chr-by-chr
     boost::posix_time::ptime now = boost::posix_time::second_clock::local_time();
-    std::cerr << '[' << boost::posix_time::to_simple_string(now) << "] " << "Methylation scanning" << std::endl;
+    //std::cerr << '[' << boost::posix_time::to_simple_string(now) << "] " << "Methylation scanning" << std::endl;
 
     bool onlyCpG = false;
     uint8_t probTh = (uint8_t) ((int) (0.5 * 256));
@@ -213,21 +213,23 @@ namespace cameo
 		auto it = modByPos.find(sp);
 		if (it != modByPos.end()) {
 		  for(const auto& mh : it->second) {
-		    bool modOnRefPlus = (mh.strand == '+');
-		    if ((mh.code == 'm') || (mh.code == 'M')) {
-		      if (modOnRefPlus) {
-			if ((mh.prob >= probTh) && (m_plus[rp] < maxval)) ++m_plus[rp];
+		    if ((mh.prob == 255) || (mh.prob >= probTh)) {
+		      bool modOnRefPlus = ((mh.strand == '+') != readRev);
+		      if ((mh.code == 'm') || (mh.code == 'M')) {
+			if (modOnRefPlus) {
+			  if (m_plus[rp] < maxval) ++m_plus[rp];
+			} else {
+			  if (m_minus[rp] < maxval) ++m_minus[rp];
+			}
+		      } else if ((mh.code == 'h') || (mh.code == 'H')) {
+			if (modOnRefPlus) {
+			  if (h_plus[rp] < maxval) ++h_plus[rp];
+			} else {
+			  if (h_minus[rp] < maxval) ++h_minus[rp];
+			}
 		      } else {
-			if ((mh.prob >= probTh) && (m_minus[rp] < maxval)) ++m_minus[rp];
+			std::cerr << "Warning: Unknown modification code! " << mh.code << std::endl;
 		      }
-		    } else if ((mh.code == 'h') || (mh.code == 'H')) {
-		      if (modOnRefPlus) {
-			if ((mh.prob >= probTh) && (h_plus[rp] < maxval)) ++h_plus[rp];
-		      } else {
-			if ((mh.prob >= probTh) && (h_minus[rp] < maxval)) ++h_minus[rp];
-		      }
-		    } else {
-		      std::cerr << "Warning: Unknown modification code! " << mh.code << std::endl;
 		    }
 		  }
 		}
@@ -252,7 +254,7 @@ namespace cameo
 	for(uint32_t i = 0; i < hdr->target_len[refIndex]; ++i) acc[file_c](cov_plus[i] + cov_minus[i]);
 	double sdcov = sqrt(boost::accumulators::variance(acc[file_c]));
 	double avgcov = boost::accumulators::mean(acc[file_c]);
-	std::cerr << c.files[file_c].string() << ", " << hdr->target_name[refIndex] << ", meancov=" << avgcov << ", sdcov=" << sdcov << std::endl;
+	//std::cerr << c.files[file_c].string() << ", " << hdr->target_name[refIndex] << ", meancov=" << avgcov << ", sdcov=" << sdcov << std::endl;
 
 	// Output percent modified per site
 	// Header: file,chrom,1-based-pos,refbase,cov_plus,cov_minus,mod_m_plus,mod_m_minus,mod_h_plus,mod_h_minus,percent_modified(+),percent_modified(-),percent_modified(collapsed)

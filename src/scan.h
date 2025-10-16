@@ -166,6 +166,7 @@ namespace cameo
 	  bool readRev = (rec->core.flag & BAM_FREVERSE);
 	  
 	  // Reorder by read position
+	  if (readRev) reverseComplement(sequence);
 	  std::unordered_map<char, std::vector<int32_t>> base_occurrence_positions;
 	  for (int32_t i = 0; i < (int32_t) sequence.size(); ++i) {
 	    char b = std::toupper(static_cast<unsigned char>(sequence[i]));
@@ -177,15 +178,12 @@ namespace cameo
 	  for (const auto& mh : modhits) {
 	    char ub = std::toupper(static_cast<unsigned char>(mh.base));
  	    char target_base = (mh.strand == '+') ? ub : complement_base(ub);
-	    if (readRev) target_base = complement_base(target_base);
  	    auto it = base_occurrence_positions.find(target_base);
 	    if (it == base_occurrence_positions.end()) continue;
 	    const auto& occs = it->second;
 	    if (mh.pos < 0 || (std::size_t)mh.pos >= occs.size()) continue;
 	    std::size_t occ_index = (std::size_t) mh.pos;
-	    //if (mh.strand != '+') occ_index = occs.size() - 1 - (std::size_t) mh.pos;
  	    int32_t read_pos = occs[occ_index];
-	    //if (readRev) read_pos = rec->core.l_qseq - occs[occ_index] - 1;
 	    adjusted_modhits.push_back(ModHit(read_pos, mh.code, mh.prob, mh.strand, mh.base));
 	  }
 	  modhits.swap(adjusted_modhits);

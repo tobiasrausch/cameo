@@ -12,6 +12,7 @@
 #include <boost/dynamic_bitset.hpp>
 #include <boost/accumulators/accumulators.hpp>
 #include <boost/accumulators/statistics.hpp>
+#include <boost/format.hpp>
 
 #include <htslib/sam.h>
 
@@ -62,6 +63,9 @@ namespace cameo
     // Parse genome chr-by-chr
     boost::posix_time::ptime now = boost::posix_time::second_clock::local_time();
     std::cerr << '[' << boost::posix_time::to_simple_string(now) << "] " << "Methylation scanning" << std::endl;
+
+    bool onlyCpG = false;
+    uint8_t probTh = (uint8_t) ((int) (0.5 * 256));
     
     // Iterate chromosomes
     for(int32_t refIndex=0; refIndex < (int32_t) hdr->n_targets; ++refIndex) {
@@ -158,6 +162,32 @@ namespace cameo
 	    }
 	  }
 
+	  // Reorder by read position
+	  std::unordered_map<char, std::vector<int32_t>> base_occurrence_positions;
+	  for (int32_t i = 0; i < (int32_t) sequence.size(); ++i) {
+	    char b = std::toupper(static_cast<unsigned char>(sequence[i]));
+	    base_occurrence_positions[b].push_back(i);
+	  }
+	  // Now create a new vector of ModHit with pos replaced by the absolute read position
+	  std::vector<ModHit> adjusted_modhits;
+	  adjusted_modhits.reserve(modhits.size());
+	  for (const auto& mh : modhits) {
+	    char ub = std::toupper(static_cast<unsigned char>(mh.base));
+	    auto it = base_occurrence_positions.find(ub);
+	    if (it == base_occurrence_positions.end()) {
+	      // no occurrences of that base in this read; skip
+	      continue;
+	    }
+	    const auto& occs = it->second;
+	    if (mh.pos < 0 || (std::size_t)mh.pos >= occs.size()) {
+	      // occurrence index out of range -> skip
+	      continue;
+	    }
+	    int32_t read_pos = occs[mh.pos]; // absolute read coordinate (sp)
+	    adjusted_modhits.push_back(ModHit(read_pos, mh.code, mh.prob, mh.strand, mh.base));
+	  }
+	  modhits.swap(adjusted_modhits);
+
 	  // Build map from read position to modification hits
 	  std::unordered_map<int32_t, std::vector<ModHit> > modByPos;
 	  for(const auto& mh : modhits) modByPos[mh.pos].push_back(mh);
@@ -186,15 +216,15 @@ namespace cameo
 		    bool modOnRefPlus = (mh.strand == '+');
 		    if ((mh.code == 'm') || (mh.code == 'M')) {
 		      if (modOnRefPlus) {
-			if (m_plus[rp] < maxval) ++m_plus[rp];
+			if ((mh.prob >= probTh) && (m_plus[rp] < maxval)) ++m_plus[rp];
 		      } else {
-			if (m_minus[rp] < maxval) ++m_minus[rp];
+			if ((mh.prob >= probTh) && (m_minus[rp] < maxval)) ++m_minus[rp];
 		      }
 		    } else if ((mh.code == 'h') || (mh.code == 'H')) {
 		      if (modOnRefPlus) {
-			if (h_plus[rp] < maxval) ++h_plus[rp];
+			if ((mh.prob >= probTh) && (h_plus[rp] < maxval)) ++h_plus[rp];
 		      } else {
-			if (h_minus[rp] < maxval) ++h_minus[rp];
+			if ((mh.prob >= probTh) && (h_minus[rp] < maxval)) ++h_minus[rp];
 		      }
 		    } else {
 		      std::cerr << "Warning: Unknown modification code! " << mh.code << std::endl;
@@ -226,7 +256,6 @@ namespace cameo
 
 	// Output percent modified per site
 	// Header: file,chrom,1-based-pos,refbase,cov_plus,cov_minus,mod_m_plus,mod_m_minus,mod_h_plus,mod_h_minus,percent_modified(+),percent_modified(-),percent_modified(collapsed)
-	bool onlyCpG = false;
 	for (uint32_t pos = 0; pos < hdr->target_len[refIndex]; ++pos) {
 	  // optionally count only CpG sites
 	  if (onlyCpG) {
@@ -235,19 +264,28 @@ namespace cameo
 	    char b2 = std::toupper(seq[pos+1]);
 	    if (!(b1 == 'C' && b2 == 'G')) continue;
 	  }
-	  if (h_minus[pos]) std::cerr << hdr->target_name[refIndex] << "\t" << (pos + 1) << "\t" << (pos + 2) << "\th\t" << cov_minus[pos] << "\t-\t" << (pos + 1) << "\t" << (pos + 2) << "\t255,0,0\t" << cov_minus[pos] << "\t" << ((cov_minus[pos] > 0) ? 100.0 * double(h_minus[pos]) / double(cov_minus[pos]) : 0.0) << "\t" << h_minus[pos] << std::endl;
-	  if (h_plus[pos]) std::cerr << hdr->target_name[refIndex] << "\t" << (pos + 1) << "\t" << (pos + 2) << "\th\t" << cov_plus[pos] << "\t-\t" << (pos + 1) << "\t" << (pos + 2) << "\t255,0,0\t" << cov_plus[pos] << "\t" << ((cov_plus[pos] > 0) ? 100.0 * double(h_plus[pos]) / double(cov_plus[pos]) : 0.0) << "\t" << h_plus[pos] << std::endl;
-	  if (m_minus[pos]) std::cerr << hdr->target_name[refIndex] << "\t" << (pos + 1) << "\t" << (pos + 2) << "\tm\t" << cov_minus[pos] << "\t-\t" << (pos + 1) << "\t" << (pos + 2) << "\t255,0,0\t" << cov_minus[pos] << "\t" << ((cov_minus[pos] > 0) ? 100.0 * double(m_minus[pos]) / double(cov_minus[pos]) : 0.0) << "\t" << m_minus[pos] << std::endl;
-	  if (m_plus[pos]) std::cerr << hdr->target_name[refIndex] << "\t" << (pos + 1) << "\t" << (pos + 2) << "\tm\t" << cov_plus[pos] << "\t-\t" << (pos + 1) << "\t" << (pos + 2) << "\t255,0,0\t" << cov_plus[pos] << "\t" << ((cov_plus[pos] > 0) ? 100.0 * double(m_plus[pos]) / double(cov_plus[pos]) : 0.0) << "\t" << m_plus[pos] << std::endl;
+	  int32_t total_plus = h_plus[pos] + m_plus[pos];
+	  int32_t total_minus = h_minus[pos] + m_minus[pos];
+	  double pct_h_minus = ((cov_minus[pos] > 0) ? 100.0 * double(h_minus[pos]) / double(cov_minus[pos]) : 0.0);
+	  double pct_h_plus = ((cov_plus[pos] > 0) ? 100.0 * double(h_plus[pos]) / double(cov_plus[pos]) : 0.0);
+	  double pct_m_minus = ((cov_minus[pos] > 0) ? 100.0 * double(m_minus[pos]) / double(cov_minus[pos]) : 0.0);
+	  double pct_m_plus = ((cov_plus[pos] > 0) ? 100.0 * double(m_plus[pos]) / double(cov_plus[pos]) : 0.0);
+	  if (total_minus) std::cerr << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\th\t" << cov_minus[pos] << "\t-\t" << pos << "\t" << (pos + 1) << "\t255,0,0\t" << cov_minus[pos] << "\t" << (boost::format("%1$.2f") % pct_h_minus) << "\t" << h_minus[pos] << std::endl;
+	  if (total_plus) std::cerr << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\th\t" << cov_plus[pos] << "\t+\t" << pos << "\t" << (pos + 1) << "\t255,0,0\t" << cov_plus[pos] << "\t" << (boost::format("%1$.2f") % pct_h_plus) << "\t" << h_plus[pos] << std::endl;
+	  if (total_minus) std::cerr << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\tm\t" << cov_minus[pos] << "\t-\t" << pos << "\t" << (pos + 1) << "\t255,0,0\t" << cov_minus[pos] << "\t" << (boost::format("%1$.2f") % pct_m_minus) << "\t" << m_minus[pos] << std::endl;
+	  if (total_plus) std::cerr << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\tm\t" << cov_plus[pos] << "\t+\t" << pos << "\t" << (pos + 1) << "\t255,0,0\t" << cov_plus[pos] << "\t" << (boost::format("%1$.2f") % pct_m_plus) << "\t" << m_plus[pos] << std::endl;
 	}
       }
       // Free space
-      if (seq != NULL) free(seq);
+      if (seq != NULL) {
+	free(seq);
+	seq = NULL;
+      }
       exit(-1);
     }
 
     // Clean-up
-    fai_destroy(fai);
+    if (fai) fai_destroy(fai);
     bam_hdr_destroy(hdr);
     for(unsigned int file_c = 0; file_c < c.files.size(); ++file_c) {
       hts_idx_destroy(idx[file_c]);

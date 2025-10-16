@@ -18,6 +18,12 @@
 
 #include "util.h"
 
+#include <tuple>
+#include <cstdlib>
+#include <iostream>
+#include <string>
+#include <cctype>
+
 namespace cameo
 {
 
@@ -30,6 +36,133 @@ namespace cameo
 
     ModHit(int32_t const p, char const c, uint8_t const r, char const s, char const b) : pos(p), code(c), prob(r), strand(s), base(b) {}
   };
+
+
+  static inline int32_t readpos_to_refpos_for_debug(bam1_t* rec, int32_t target_sp) {
+    uint32_t rp = rec->core.pos; // 0-based reference position
+    uint32_t sp = 0;
+    uint32_t* cigar = bam_get_cigar(rec);
+    for (std::size_t i = 0; i < rec->core.n_cigar; ++i) {
+      uint32_t op = bam_cigar_op(cigar[i]);
+      uint32_t oplen = bam_cigar_oplen(cigar[i]);
+      if ((op == BAM_CMATCH) || (op == BAM_CEQUAL) || (op == BAM_CDIFF)) {
+        for (uint32_t k = 0; k < oplen; ++k) {
+          if (sp == (uint32_t)target_sp) return (int32_t)rp;
+          ++rp; ++sp;
+        }
+      } else if (op == BAM_CDEL) {
+        rp += oplen;
+      } else if (op == BAM_CINS) {
+        for (uint32_t k=0; k<oplen; ++k) {
+          if (sp == (uint32_t)target_sp) {
+            return (int32_t)rp;
+          }
+          ++sp;
+        }
+      } else if (op == BAM_CSOFT_CLIP) {
+        for (uint32_t k=0; k<oplen; ++k) {
+          if (sp == (uint32_t)target_sp) {
+            return -1;
+          }
+          ++sp;
+        }
+      } else if (op == BAM_CHARD_CLIP) {
+      } else if (op == BAM_CREF_SKIP) {
+        rp += oplen;
+      }
+    }
+    return -2;
+  }
+
+  // raw_modhits: vector of tuples (occurrence_index, modcode, prob, strand, base)
+  static inline void debug_mm_for_read(bam1_t* rec, bam_hdr_t* hdr, const std::vector<std::tuple<int32_t,char,uint8_t,char,char>>& raw_modhits) {
+    const char* qname = bam_get_qname(rec);
+    bool readRev = (rec->core.flag & BAM_FREVERSE);
+    uint8_t* mm_aux = bam_aux_get(rec, "MM");
+    uint8_t* ml_aux = bam_aux_get(rec, "ML");
+    std::string mm_raw = mm_aux ? std::string((char*)(mm_aux+1)) : std::string();
+    std::string ml_repr = ml_aux ? "present" : "absent";
+
+    std::cerr << "=== MM DEBUG ===\n";
+    std::cerr << "QNAME: " << (qname?qname:"(null)") << " FLAG: " << rec->core.flag << " readRev: " << readRev << " POS: " << rec->core.pos << " CIGAR: ";
+    // print cigar as simple string
+    uint32_t* cigar = bam_get_cigar(rec);
+    for (std::size_t i=0;i<rec->core.n_cigar;++i) {
+      uint32_t op = bam_cigar_op(cigar[i]);
+      uint32_t oplen = bam_cigar_oplen(cigar[i]);
+      char oc = "MIDNSHP=XB"[op];
+      std::cerr << oplen << oc;
+    }
+    std::cerr << "\n";
+    std::cerr << "MM raw: " << mm_raw << " ML: " << ml_repr << "\n";
+
+    // build read sequence string
+    std::string seq;
+    seq.resize(rec->core.l_qseq);
+    uint8_t* seqptr = bam_get_seq(rec);
+    for (int32_t i=0;i<rec->core.l_qseq;++i) seq[i] = "=ACMGRSVTWYHKDBN"[bam_seqi(seqptr,i)];
+
+    // For each raw modhit provide diagnostic mapping
+    for (const auto& t : raw_modhits) {
+      int32_t occ = std::get<0>(t);
+      char code = std::get<1>(t);
+      uint8_t prob = std::get<2>(t);
+      char strand = std::get<3>(t);
+      char base = std::get<4>(t);
+
+      char ub = std::toupper(static_cast<unsigned char>(base));
+      char target_base;
+      if (strand == '+') target_base = ub;
+      else {
+        // complement (simple)
+        switch (ub) {
+        case 'A': target_base = 'T'; break;
+        case 'T': target_base = 'A'; break;
+        case 'C': target_base = 'G'; break;
+        case 'G': target_base = 'C'; break;
+        default: target_base = ub; break;
+        }
+      }
+
+      std::vector<int32_t> occs;
+      for (int32_t i=0;i<(int32_t)seq.size();++i)
+        if (std::toupper(static_cast<unsigned char>(seq[i]))==target_base) occs.push_back(i);
+
+      std::cerr << "ModHit token: base="<<base<<" strand="<<strand<<" code="<<code<<" occ_index(token)="<<occ<<" prob="<<(int)prob<<"\n";
+      std::cerr << " target_base used to search read: " << target_base << " (occurrences in read="<<occs.size()<<")\n";
+      if (occs.empty()) { std::cerr << "  -> No occurrences of target_base in read sequence\n"; continue; }
+
+      // compute occ_index used by current code (mirroring for '-' tokens)
+      std::size_t occ_index;
+      if (strand == '+') occ_index = (std::size_t)occ;
+      else occ_index = occs.size() - 1 - (std::size_t)occ;
+
+      std::cerr << " occs list: ";
+      for (auto x:occs) std::cerr << x << ",";
+      std::cerr << "\n";
+      std::cerr << " occ_index chosen = " << occ_index;
+      if (occ_index < occs.size()) {
+        std::cerr << " (read_pos/sp = " << occs[occ_index] << ")\n";
+      } else {
+        std::cerr << " (out-of-range occ_index)\n";
+        continue;
+      }
+      int32_t sp = occs[occ_index];
+
+      int32_t rp = readpos_to_refpos_for_debug(rec, sp);
+      std::cerr << " mapped read_pos(sp="<<sp<<") -> ref_pos(rp) = ";
+      if (rp >= 0) std::cerr << rp << " (0-based)\n"; else if (rp == -1) std::cerr << "soft-clipped (no ref mapping)\n"; else std::cerr << "out-of-range\n";
+
+      // show how modOnRefPlus would be computed under both conventions
+      bool modOnRefPlus_xor = ((strand == '+') != readRev);
+      bool modOnRefPlus_direct = (strand == '+');
+      std::cerr << " modOnRefPlus (XOR-with-readRev): " << modOnRefPlus_xor << "  (direct-token): " << modOnRefPlus_direct << "\n";
+      std::cerr << "-----------------------\n";
+    }
+    std::cerr << "=== /MM DEBUG ===\n";
+  }
+  // --- /MM debug helper functions ---
+
 
   template<typename TConfig>
   inline bool
@@ -162,7 +295,28 @@ namespace cameo
 	    }
 	  }
 
-	  // Reverse read
+	  // Debug invocation (controlled by env var CAMEO_DEBUG_MM)
+	  {
+	    const char* dbg_env = std::getenv("CAMEO_DEBUG_MM");
+	    if (dbg_env) {
+	      // parse optional limit from envvar, default 100
+	      int limit = 100;
+	      try { limit = std::stoi(std::string(dbg_env)); } catch(...) {}
+	      static int debug_count = 0;
+	      if (debug_count < limit) {
+		// prepare raw vector of tuples (occurrence_index, code, prob, strand, base)
+		std::vector<std::tuple<int32_t,char,uint8_t,char,char>> raw_modhits;
+		raw_modhits.reserve(modhits.size());
+		for (const auto& mh : modhits) raw_modhits.emplace_back(mh.pos, mh.code, mh.prob, mh.strand, mh.base);
+		if (!raw_modhits.empty()) {
+		  debug_mm_for_read(rec, hdr, raw_modhits);
+		  ++debug_count;
+		}
+	      }
+	    }
+	  }
+
+	  // Reverse read flag used later
 	  bool readRev = (rec->core.flag & BAM_FREVERSE);
 	  
 	  // Reorder by read position

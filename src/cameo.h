@@ -23,6 +23,7 @@
 
 #include "edlib.h"
 #include "util.h"
+#include "scan.h"
 
 namespace cameo {
 
@@ -56,6 +57,9 @@ namespace cameo {
 #ifdef PROFILE
     ProfilerStart("cameo.prof");
 #endif
+
+    // Search promoters
+    findPromoters(c);
     
 #ifdef PROFILE
     ProfilerStop();

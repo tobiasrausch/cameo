@@ -9,6 +9,8 @@
 #include <boost/iostreams/filter/gzip.hpp>
 #include <boost/filesystem/fstream.hpp>
 #include <boost/filesystem.hpp>
+#include <boost/algorithm/string.hpp>
+#include <boost/lexical_cast.hpp>
 
 #include <htslib/sam.h>
 

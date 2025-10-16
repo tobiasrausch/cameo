@@ -14,6 +14,8 @@
 #include <htslib/sam.h>
 
 #include "version.h"
+#include "threadpool.h"
+#include "util.h"
 #include "cameo.h"
 
 using namespace cameo;

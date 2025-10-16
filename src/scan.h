@@ -24,8 +24,10 @@ namespace cameo
     int32_t pos;
     char code;
     uint8_t prob;
+    char strand;
+    char base;
 
-    ModHit(int32_t const p, char const c, uint8_t const r) : pos(p), code(c), prob(r) {}
+    ModHit(int32_t const p, char const c, uint8_t const r, char const s, char const b) : pos(p), code(c), prob(r), strand(s), base(b) {}
   };
 
   template<typename TConfig>
@@ -90,9 +92,6 @@ namespace cameo
 	  if (rec->core.flag & (BAM_FQCFAIL | BAM_FDUP | BAM_FUNMAP)) continue;
 	  if ((rec->core.qual < c.minMapQual) || (rec->core.tid<0)) continue;
 	  
-	  std::size_t seed = hash_lr(rec);
-	  //std::cerr << bam_get_qname(rec) << '\t' << seed << std::endl;
-
 	  // Parse quality and seq
 	  typedef std::vector<uint8_t> TQuality;
 	  TQuality quality;
@@ -115,14 +114,18 @@ namespace cameo
 	    std::vector<std::string> tokens;
 	    boost::split(tokens, s, boost::is_any_of(";"));
 	    for(const auto& tok : tokens) {
-	      if (tok.size() == 0) continue;
-	      // parse <base><strand><modcode>,<pos>,<pos>,...
+	      if (tok.empty()) continue;
+	      // parse <base><strand><modcode>,<pos>,<pos>,... e.g. C+m,0,5,...
 	      std::size_t idx_tok = 0;
 	      char base = tok[idx_tok++];
 	      if (idx_tok >= tok.size()) continue;
 	      char strand = tok[idx_tok++];
 	      std::string mod_codes;
-	      while ((idx_tok < tok.size()) && (tok[idx_tok] != ',')) mod_codes.push_back(tok[idx_tok++]);
+	      while ((idx_tok < tok.size()) && (tok[idx_tok] != ',')) {
+		char ch = tok[idx_tok++];
+		if (std::isalpha(static_cast<unsigned char>(ch))) mod_codes.push_back(ch); // ignore ?
+	      }
+	      // parse positions
 	      if ((idx_tok < tok.size()) && (tok[idx_tok] == ',')) {
 		std::string pos_str = tok.substr(idx_tok+1);
 		if (!pos_str.empty()) {
@@ -130,11 +133,11 @@ namespace cameo
 		  boost::split(pos_tokens, pos_str, boost::is_any_of(","));
 		  int32_t current = -1;
 		  for(const auto& ptoken : pos_tokens) {
-		    if (ptoken.size() == 0) continue;
+		    if (ptoken.empty()) continue;
 		    int32_t delta = 0;
 		    delta = std::stoi(ptoken);
 		    current += (delta + 1);
-		    for(char mc : mod_codes) modhits.push_back(ModHit(current, mc, 255));
+		    for(char mc : mod_codes) modhits.push_back(ModHit(current, mc, 255, strand, base));
 		  }
 		}
 	      }
@@ -180,16 +183,15 @@ namespace cameo
 		auto it = modByPos.find(sp);
 		if (it != modByPos.end()) {
 		  for(const auto& mh : it->second) {
-		    char mm_strand = '+';
-		    bool modOnRef = !readRev;
+		    bool modOnRefPlus = (mh.strand == '+');
 		    if ((mh.code == 'm') || (mh.code == 'M')) {
-		      if (modOnRef) {
+		      if (modOnRefPlus) {
 			if (m_plus[rp] < maxval) ++m_plus[rp];
 		      } else {
 			if (m_minus[rp] < maxval) ++m_minus[rp];
 		      }
 		    } else if ((mh.code == 'h') || (mh.code == 'H')) {
-		      if (modOnRef) {
+		      if (modOnRefPlus) {
 			if (h_plus[rp] < maxval) ++h_plus[rp];
 		      } else {
 			if (h_minus[rp] < maxval) ++h_minus[rp];
@@ -217,7 +219,7 @@ namespace cameo
 	hts_itr_destroy(iter);
 	
 	// Summarize coverage for this chromosome
-	for(uint32_t i = 0; i < hdr->target_len[refIndex]; ++i) acc[file_c](cov_plus[i]);
+	for(uint32_t i = 0; i < hdr->target_len[refIndex]; ++i) acc[file_c](cov_plus[i] + cov_minus[i]);
 	double sdcov = sqrt(boost::accumulators::variance(acc[file_c]));
 	double avgcov = boost::accumulators::mean(acc[file_c]);
 	std::cerr << c.files[file_c].string() << ", " << hdr->target_name[refIndex] << ", meancov=" << avgcov << ", sdcov=" << sdcov << std::endl;

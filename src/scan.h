@@ -162,6 +162,9 @@ namespace cameo
 	    }
 	  }
 
+	  // Reverse read
+	  bool readRev = (rec->core.flag & BAM_FREVERSE);
+	  
 	  // Reorder by read position
 	  std::unordered_map<char, std::vector<int32_t>> base_occurrence_positions;
 	  for (int32_t i = 0; i < (int32_t) sequence.size(); ++i) {
@@ -178,7 +181,10 @@ namespace cameo
 	    if (it == base_occurrence_positions.end()) continue;
 	    const auto& occs = it->second;
 	    if (mh.pos < 0 || (std::size_t)mh.pos >= occs.size()) continue;
-	    int32_t read_pos = occs[mh.pos]; // absolute read coordinate (sp)
+	    std::size_t occ_index;
+	    if (mh.strand == '+') occ_index = (std::size_t) mh.pos;
+	    else occ_index = occs.size() - 1 - (std::size_t) mh.pos;
+ 	    int32_t read_pos = occs[occ_index];
 	    adjusted_modhits.push_back(ModHit(read_pos, mh.code, mh.prob, mh.strand, mh.base));
 	  }
 	  modhits.swap(adjusted_modhits);
@@ -191,7 +197,6 @@ namespace cameo
 	  uint32_t rp = rec->core.pos; // reference pointer
 	  uint32_t sp = 0; // sequence pointer
 	  uint32_t* cigar = bam_get_cigar(rec);
-	  bool readRev = (rec->core.flag & BAM_FREVERSE);
 	  for (std::size_t i = 0; i < rec->core.n_cigar; ++i) {
 	    uint32_t op = bam_cigar_op(cigar[i]);
 	    uint32_t oplen = bam_cigar_oplen(cigar[i]);

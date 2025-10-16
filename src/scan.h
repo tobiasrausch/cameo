@@ -330,14 +330,13 @@ namespace cameo
 	  adjusted_modhits.reserve(modhits.size());
 	  for (const auto& mh : modhits) {
 	    char ub = std::toupper(static_cast<unsigned char>(mh.base));
- 	    char target_base = (mh.strand == '+') ? ub : complement_base(ub);
- 	    auto it = base_occurrence_positions.find(target_base);
+ 	    char read_base = (mh.strand == '+') ? ub : complement_base(ub);
+	    if (readRev) read_base = complement_base(read_base);
+ 	    auto it = base_occurrence_positions.find(read_base);
 	    if (it == base_occurrence_positions.end()) continue;
 	    const auto& occs = it->second;
 	    if (mh.pos < 0 || (std::size_t)mh.pos >= occs.size()) continue;
-	    std::size_t occ_index;
-	    if (mh.strand == '+') occ_index = (std::size_t) mh.pos;
-	    else occ_index = occs.size() - 1 - (std::size_t) mh.pos;
+	    std::size_t occ_index = (std::size_t) mh.pos;
  	    int32_t read_pos = occs[occ_index];
 	    adjusted_modhits.push_back(ModHit(read_pos, mh.code, mh.prob, mh.strand, mh.base));
 	  }

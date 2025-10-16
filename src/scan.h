@@ -233,8 +233,9 @@ namespace cameo
 	      rp += oplen;
 	    } else if (op == BAM_CINS) {
 	      sp += oplen;
-	    } else if ((op == BAM_CSOFT_CLIP) || (op == BAM_CHARD_CLIP)) {
+	    } else if (op == BAM_CSOFT_CLIP) {
 	      sp += oplen;
+	    } else if (op == BAM_CHARD_CLIP) {
 	    } else if (op == BAM_CREF_SKIP) {
 	      rp += oplen;
 	    } else {

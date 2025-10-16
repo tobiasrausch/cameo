@@ -223,6 +223,17 @@ namespace cameo
     boost::hash_combine(seed, string_hash(qname));
     return seed;
   }
+
+  inline char
+  complement_base(char b) {
+    switch (std::toupper(static_cast<unsigned char>(b))) {
+    case 'A': return 'T';
+    case 'C': return 'G';
+    case 'G': return 'C';
+    case 'T': return 'A';
+    default: return b;
+    }
+  }
   
   inline void
   reverseComplement(std::string& sequence) {

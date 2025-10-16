@@ -173,16 +173,11 @@ namespace cameo
 	  adjusted_modhits.reserve(modhits.size());
 	  for (const auto& mh : modhits) {
 	    char ub = std::toupper(static_cast<unsigned char>(mh.base));
-	    auto it = base_occurrence_positions.find(ub);
-	    if (it == base_occurrence_positions.end()) {
-	      // no occurrences of that base in this read; skip
-	      continue;
-	    }
+ 	    char target_base = (mh.strand == '+') ? ub : complement_base(ub);
+ 	    auto it = base_occurrence_positions.find(target_base);
+	    if (it == base_occurrence_positions.end()) continue;
 	    const auto& occs = it->second;
-	    if (mh.pos < 0 || (std::size_t)mh.pos >= occs.size()) {
-	      // occurrence index out of range -> skip
-	      continue;
-	    }
+	    if (mh.pos < 0 || (std::size_t)mh.pos >= occs.size()) continue;
 	    int32_t read_pos = occs[mh.pos]; // absolute read coordinate (sp)
 	    adjusted_modhits.push_back(ModHit(read_pos, mh.code, mh.prob, mh.strand, mh.base));
 	  }

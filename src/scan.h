@@ -185,7 +185,7 @@ namespace cameo
 	    std::size_t occ_index = (std::size_t) mh.pos;
 	    //if (mh.strand != '+') occ_index = occs.size() - 1 - (std::size_t) mh.pos;
  	    int32_t read_pos = occs[occ_index];
-	    if (readRev) read_pos = rec->core.l_qseq - occs[occ_index] - 1;
+	    //if (readRev) read_pos = rec->core.l_qseq - occs[occ_index] - 1;
 	    adjusted_modhits.push_back(ModHit(read_pos, mh.code, mh.prob, mh.strand, mh.base));
 	  }
 	  modhits.swap(adjusted_modhits);

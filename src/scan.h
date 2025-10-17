@@ -254,23 +254,40 @@ namespace cameo
 
 	// Output percent modified per site
 	for (uint32_t pos = 0; pos < hdr->target_len[refIndex]; ++pos) {
-	  // optionally count only CpG sites
+	  // CpG sites
+	  bool fwdCpG = true;
+	  bool revCpG = true;
 	  if (c.onlyCpG) {
-	    if (pos + 1 >= hdr->target_len[refIndex]) continue;
-	    char b1 = std::toupper(seq[pos]);
-	    char b2 = std::toupper(seq[pos+1]);
-	    if (!(b1 == 'C' && b2 == 'G')) continue;
+	    fwdCpG = false;
+	    revCpG = false;
+	    if (pos + 1 < hdr->target_len[refIndex]) {
+	      char b1 = std::toupper(seq[pos]);
+	      char b2 = std::toupper(seq[pos+1]);
+	      if ((b1 == 'C') && (b2 == 'G')) fwdCpG = true;
+	    }
+	    if (pos > 0) {
+	      char b1 = std::toupper(seq[pos-1]);
+	      char b2 = std::toupper(seq[pos]);
+	      if ((b1 == 'C') && (b2 == 'G')) revCpG = true;
+	    }
 	  }
-	  int32_t total_plus = h_plus[pos] + m_plus[pos];
-	  int32_t total_minus = h_minus[pos] + m_minus[pos];
+
+	  // Pct modified
 	  double pct_h_minus = ((cov_minus[pos] > 0) ? 100.0 * double(h_minus[pos]) / double(cov_minus[pos]) : 0.0);
 	  double pct_h_plus = ((cov_plus[pos] > 0) ? 100.0 * double(h_plus[pos]) / double(cov_plus[pos]) : 0.0);
 	  double pct_m_minus = ((cov_minus[pos] > 0) ? 100.0 * double(m_minus[pos]) / double(cov_minus[pos]) : 0.0);
 	  double pct_m_plus = ((cov_plus[pos] > 0) ? 100.0 * double(m_plus[pos]) / double(cov_plus[pos]) : 0.0);
-	  if (total_minus) std::cerr << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\th\t" << cov_minus[pos] << "\t-\t" << pos << "\t" << (pos + 1) << "\t255,0,0\t" << cov_minus[pos] << "\t" << (boost::format("%1$.2f") % pct_h_minus) << "\t" << h_minus[pos] << std::endl;
-	  if (total_plus) std::cerr << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\th\t" << cov_plus[pos] << "\t+\t" << pos << "\t" << (pos + 1) << "\t255,0,0\t" << cov_plus[pos] << "\t" << (boost::format("%1$.2f") % pct_h_plus) << "\t" << h_plus[pos] << std::endl;
-	  if (total_minus) std::cerr << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\tm\t" << cov_minus[pos] << "\t-\t" << pos << "\t" << (pos + 1) << "\t255,0,0\t" << cov_minus[pos] << "\t" << (boost::format("%1$.2f") % pct_m_minus) << "\t" << m_minus[pos] << std::endl;
-	  if (total_plus) std::cerr << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\tm\t" << cov_plus[pos] << "\t+\t" << pos << "\t" << (pos + 1) << "\t255,0,0\t" << cov_plus[pos] << "\t" << (boost::format("%1$.2f") % pct_m_plus) << "\t" << m_plus[pos] << std::endl;
+
+	  // Plus strand
+	  if (fwdCpG) {
+	    if (h_plus[pos]) std::cerr << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\th\t" << cov_plus[pos] << "\t+\t" << pos << "\t" << (pos + 1) << "\t255,0,0\t" << cov_plus[pos] << "\t" << (boost::format("%1$.2f") % pct_h_plus) << "\t" << h_plus[pos] << std::endl;
+	    if (m_plus[pos]) std::cerr << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\tm\t" << cov_plus[pos] << "\t+\t" << pos << "\t" << (pos + 1) << "\t255,0,0\t" << cov_plus[pos] << "\t" << (boost::format("%1$.2f") % pct_m_plus) << "\t" << m_plus[pos] << std::endl;
+	  }
+	  // Minus strand
+	  if (revCpG) {
+	    if (h_minus[pos]) std::cerr << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\th\t" << cov_minus[pos] << "\t-\t" << pos << "\t" << (pos + 1) << "\t255,0,0\t" << cov_minus[pos] << "\t" << (boost::format("%1$.2f") % pct_h_minus) << "\t" << h_minus[pos] << std::endl;
+	    if (m_minus[pos]) std::cerr << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\tm\t" << cov_minus[pos] << "\t-\t" << pos << "\t" << (pos + 1) << "\t255,0,0\t" << cov_minus[pos] << "\t" << (boost::format("%1$.2f") % pct_m_minus) << "\t" << m_minus[pos] << std::endl;
+	  }
 	}
       }
       // Free space
@@ -278,7 +295,6 @@ namespace cameo
 	free(seq);
 	seq = NULL;
       }
-      exit(-1);
     }
 
     // Clean-up

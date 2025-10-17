@@ -78,7 +78,7 @@ namespace cameo {
     
     boost::program_options::options_description methyl("Methylation options");
     methyl.add_options()
-      ("minmod,m", boost::program_options::value<float>(&c.minMod)->default_value(0.5), "min. modification probability")
+      ("minmod,m", boost::program_options::value<float>(&c.minMod)->default_value(0.8), "min. modification threshold")
       ("cpg,c", "only CpG counts")
       ;
     

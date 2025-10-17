@@ -278,15 +278,25 @@ namespace cameo
 	  double pct_m_minus = ((cov_minus[pos] > 0) ? 100.0 * double(m_minus[pos]) / double(cov_minus[pos]) : 0.0);
 	  double pct_m_plus = ((cov_plus[pos] > 0) ? 100.0 * double(m_plus[pos]) / double(cov_plus[pos]) : 0.0);
 
-	  // Plus strand
-	  if (fwdCpG) {
-	    if (h_plus[pos]) std::cerr << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\th\t" << cov_plus[pos] << "\t+\t" << pos << "\t" << (pos + 1) << "\t255,0,0\t" << cov_plus[pos] << "\t" << (boost::format("%1$.2f") % pct_h_plus) << "\t" << h_plus[pos] << std::endl;
-	    if (m_plus[pos]) std::cerr << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\tm\t" << cov_plus[pos] << "\t+\t" << pos << "\t" << (pos + 1) << "\t255,0,0\t" << cov_plus[pos] << "\t" << (boost::format("%1$.2f") % pct_m_plus) << "\t" << m_plus[pos] << std::endl;
-	  }
-	  // Minus strand
-	  if (revCpG) {
-	    if (h_minus[pos]) std::cerr << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\th\t" << cov_minus[pos] << "\t-\t" << pos << "\t" << (pos + 1) << "\t255,0,0\t" << cov_minus[pos] << "\t" << (boost::format("%1$.2f") % pct_h_minus) << "\t" << h_minus[pos] << std::endl;
-	    if (m_minus[pos]) std::cerr << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\tm\t" << cov_minus[pos] << "\t-\t" << pos << "\t" << (pos + 1) << "\t255,0,0\t" << cov_minus[pos] << "\t" << (boost::format("%1$.2f") % pct_m_minus) << "\t" << m_minus[pos] << std::endl;
+	  // Unstranded
+	  if (c.combineStrands) {
+	    if ((c.onlyCpG) && (fwdCpG) && (pos + 1 < hdr->target_len[refIndex])) {
+	      double pct_m = ((cov_plus[pos] + cov_minus[pos+1] > 0) ? 100.0 * double(m_plus[pos] + m_minus[pos+1]) / double(cov_plus[pos] + cov_minus[pos+1]) : 0.0);
+	      double pct_h = ((cov_plus[pos] + cov_minus[pos+1] > 0) ? 100.0 * double(h_plus[pos] + h_minus[pos+1]) / double(cov_plus[pos] + cov_minus[pos+1]) : 0.0);
+	      if (m_plus[pos] + m_minus[pos+1]) std::cerr << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\tm\t" << (cov_plus[pos] + cov_minus[pos+1]) << "\t.\t" << pos << "\t" << (pos + 1) << "\t255,0,0\t" << (cov_plus[pos] + cov_minus[pos+1]) << "\t" << (boost::format("%1$.2f") % pct_m) << "\t" << (m_plus[pos] + m_minus[pos+1]) << std::endl;
+	      if (h_plus[pos] + h_minus[pos+1]) std::cerr << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\th\t" << (cov_plus[pos] + cov_minus[pos+1]) << "\t.\t" << pos << "\t" << (pos + 1) << "\t255,0,0\t" << (cov_plus[pos] + cov_minus[pos+1]) << "\t" << (boost::format("%1$.2f") % pct_h) << "\t" << (h_plus[pos] + h_minus[pos+1]) << std::endl;
+	    }
+	  } else {
+	    // Plus strand
+	    if (fwdCpG) {
+	      if (h_plus[pos]) std::cerr << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\th\t" << cov_plus[pos] << "\t+\t" << pos << "\t" << (pos + 1) << "\t255,0,0\t" << cov_plus[pos] << "\t" << (boost::format("%1$.2f") % pct_h_plus) << "\t" << h_plus[pos] << std::endl;
+	      if (m_plus[pos]) std::cerr << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\tm\t" << cov_plus[pos] << "\t+\t" << pos << "\t" << (pos + 1) << "\t255,0,0\t" << cov_plus[pos] << "\t" << (boost::format("%1$.2f") % pct_m_plus) << "\t" << m_plus[pos] << std::endl;
+	    }
+	    // Minus strand
+	    if (revCpG) {
+	      if (h_minus[pos]) std::cerr << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\th\t" << cov_minus[pos] << "\t-\t" << pos << "\t" << (pos + 1) << "\t255,0,0\t" << cov_minus[pos] << "\t" << (boost::format("%1$.2f") % pct_h_minus) << "\t" << h_minus[pos] << std::endl;
+	      if (m_minus[pos]) std::cerr << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\tm\t" << cov_minus[pos] << "\t-\t" << pos << "\t" << (pos + 1) << "\t255,0,0\t" << cov_minus[pos] << "\t" << (boost::format("%1$.2f") % pct_m_minus) << "\t" << m_minus[pos] << std::endl;
+	    }
 	  }
 	}
       }

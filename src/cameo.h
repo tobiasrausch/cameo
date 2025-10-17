@@ -30,6 +30,7 @@ namespace cameo {
 
   struct CameoConfig {
     bool onlyCpG;
+    bool combineStrands;
     uint16_t minMapQual;
     uint32_t maxThreads;
     int32_t nchr;
@@ -80,6 +81,7 @@ namespace cameo {
     methyl.add_options()
       ("minmod,m", boost::program_options::value<float>(&c.minMod)->default_value(0.8), "min. modification threshold")
       ("cpg,c", "only CpG counts")
+      ("combine,b", "combine strands")
       ;
     
     boost::program_options::options_description hidden("Hidden options");
@@ -113,6 +115,10 @@ namespace cameo {
     // CpGs
     if (vm.count("cpg")) c.onlyCpG = true;
     else c.onlyCpG = false;
+
+    // Combine strands
+    if (vm.count("combine")) c.combineStrands = true;
+    else c.combineStrands = false;
     
     // Check reference
     if (!(boost::filesystem::exists(c.genome) && boost::filesystem::is_regular_file(c.genome) && boost::filesystem::file_size(c.genome))) {

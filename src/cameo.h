@@ -29,24 +29,14 @@ namespace cameo {
 
 
   struct CameoConfig {
-    uint16_t insmode;
+    bool onlyCpG;
     uint16_t minMapQual;
-    uint32_t minRefSep;
-    uint32_t minClip;
-    uint32_t graphPruning;
-    uint32_t batchSize;
-    uint32_t minCliqueSize;
-    uint32_t maxReadPerSV;
     uint32_t maxThreads;
     int32_t nchr;
-    int32_t minSeedAlign;
-    int32_t cropSize;
-    float pctThres;
-    float indelExtension;
-    boost::filesystem::path outfile;
+    float minMod;
+    std::string outprefix;
     std::vector<boost::filesystem::path> files;
     boost::filesystem::path genome;
-    boost::filesystem::path insseq;
     std::vector<std::string> sampleName;
   };
   
@@ -76,49 +66,34 @@ namespace cameo {
     CameoConfig c;
    
     // Parameter
-    std::string mode;
     std::string instag;
     boost::program_options::options_description generic("Generic options");
     generic.add_options()
       ("help,?", "show help message")
-      ("technology,y", boost::program_options::value<std::string>(&mode)->default_value("ont"), "seq. technology [pb, ont]")
       ("genome,g", boost::program_options::value<boost::filesystem::path>(&c.genome), "genome fasta file")
-      ("outfile,o", boost::program_options::value<boost::filesystem::path>(&c.outfile), "tsv output file")
+      ("map-qual,q", boost::program_options::value<uint16_t>(&c.minMapQual)->default_value(1), "min. mapping quality")
+      ("outprefix,o", boost::program_options::value<std::string>(&c.outprefix)->default_value("out"), "output prefix")
       ("threads,t", boost::program_options::value<uint32_t>(&c.maxThreads)->default_value(8), "number of threads")
      ;
     
-    boost::program_options::options_description disc("Split-read options");
-    disc.add_options()
-      ("minrefsep,m", boost::program_options::value<uint32_t>(&c.minRefSep)->default_value(30), "min. reference separation")
-      ("map-qual,q", boost::program_options::value<uint16_t>(&c.minMapQual)->default_value(1), "min. mapping quality")
-      ("minclip,c", boost::program_options::value<uint32_t>(&c.minClip)->default_value(25), "min. clipping length")
-      ("min-clique-size,z", boost::program_options::value<uint32_t>(&c.minCliqueSize)->default_value(3), "min. clique size")
-      ("max-reads,p", boost::program_options::value<uint32_t>(&c.maxReadPerSV)->default_value(15), "max. reads for local assembly")
+    boost::program_options::options_description methyl("Methylation options");
+    methyl.add_options()
+      ("minmod,m", boost::program_options::value<float>(&c.minMod)->default_value(0.5), "min. modification probability")
+      ("cpg,c", "only CpG counts")
       ;
-    
-    boost::program_options::options_description brin("Breakpoint insertion options");
-    brin.add_options()
-      ("cropsize,r", boost::program_options::value<int32_t>(&c.cropSize)->default_value(20), "leading/trailing crop size")
-      ("seedlen,s", boost::program_options::value<int32_t>(&c.minSeedAlign)->default_value(130), "min. seed length")
-      ("pctid,i", boost::program_options::value<float>(&c.pctThres)->default_value(0.9), "min. percent identity")
-      ("instag,n", boost::program_options::value<std::string>(&instag)->default_value("L1"), "Type of insertion [ALU|L1|SVA|NUMT]")
-      ("insseq,e", boost::program_options::value<boost::filesystem::path>(&c.insseq), "FASTA with insertion sequence [overrides -n]")
-     ;
     
     boost::program_options::options_description hidden("Hidden options");
     hidden.add_options()
       ("input-file", boost::program_options::value< std::vector<boost::filesystem::path> >(&c.files), "input file")
-      ("pruning,j", boost::program_options::value<uint32_t>(&c.graphPruning)->default_value(1000), "graph pruning cutoff")
-      ("batchsize,b", boost::program_options::value<uint32_t>(&c.batchSize)->default_value(100), "multi-threading batch size")
       ;
    
     boost::program_options::positional_options_description pos_args;
     pos_args.add("input-file", -1);
     
     boost::program_options::options_description cmdline_options;
-    cmdline_options.add(generic).add(disc).add(brin).add(hidden);
+    cmdline_options.add(generic).add(methyl).add(hidden);
     boost::program_options::options_description visible_options;
-    visible_options.add(generic).add(disc).add(brin);
+    visible_options.add(generic).add(methyl);
     boost::program_options::variables_map vm;
     boost::program_options::store(boost::program_options::command_line_parser(argc, argv).options(cmdline_options).positional(pos_args).run(), vm);
     boost::program_options::notify(vm);
@@ -131,8 +106,13 @@ namespace cameo {
       return 0;
     }
     
-    // Clique size
-    if (c.minCliqueSize < 2) c.minCliqueSize = 2;
+    // Modification probability
+    if (c.minMod < 0) c.minMod = 0;
+    if (c.minMod > 1) c.minMod = 1;
+
+    // CpGs
+    if (vm.count("cpg")) c.onlyCpG = true;
+    else c.onlyCpG = false;
     
     // Check reference
     if (!(boost::filesystem::exists(c.genome) && boost::filesystem::is_regular_file(c.genome) && boost::filesystem::file_size(c.genome))) {
@@ -197,20 +177,12 @@ namespace cameo {
     }
     checkSampleNames(c);
     
-    // Check outfile
-    if (!vm.count("outfile")) c.outfile = "-";
-    else {
-      if (c.outfile.string() != "-") {
-	if (!_outfileValid(c.outfile)) return 1;
-      }
-    }
-    
     // Show cmd
-    //boost::posix_time::ptime now = boost::posix_time::second_clock::local_time();
-    //std::cerr << '[' << boost::posix_time::to_simple_string(now) << "] ";
-    //std::cerr << "breaktracer ";
-    //for(int i=0; i<argc; ++i) { std::cerr << argv[i] << ' '; }
-    //std::cerr << std::endl;
+    boost::posix_time::ptime now = boost::posix_time::second_clock::local_time();
+    std::cerr << '[' << boost::posix_time::to_simple_string(now) << "] ";
+    std::cerr << "breaktracer ";
+    for(int i=0; i<argc; ++i) { std::cerr << argv[i] << ' '; }
+    std::cerr << std::endl;
    
     return runCameo(c);
   }

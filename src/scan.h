@@ -62,10 +62,10 @@ namespace cameo
     
     // Parse genome chr-by-chr
     boost::posix_time::ptime now = boost::posix_time::second_clock::local_time();
-    //std::cerr << '[' << boost::posix_time::to_simple_string(now) << "] " << "Methylation scanning" << std::endl;
+    std::cerr << '[' << boost::posix_time::to_simple_string(now) << "] " << "Methylation scanning" << std::endl;
 
-    bool onlyCpG = false;
-    uint8_t probTh = (uint8_t) ((int) (0.5 * 256));
+    // Calling threshold
+    uint8_t probTh = (uint8_t) ((int) (c.minMod * 256));
     
     // Iterate chromosomes
     for(int32_t refIndex=0; refIndex < (int32_t) hdr->n_targets; ++refIndex) {
@@ -93,10 +93,11 @@ namespace cameo
 	while (sam_itr_next(samfile[file_c], iter, rec) >= 0) {
 	  
 	  // Keep secondary alignments
-	  if (rec->core.flag & (BAM_FQCFAIL | BAM_FDUP | BAM_FUNMAP)) continue;
+	  if (rec->core.flag & (BAM_FSECONDARY | BAM_FQCFAIL | BAM_FDUP | BAM_FSUPPLEMENTARY | BAM_FUNMAP)) continue;
 	  if ((rec->core.qual < c.minMapQual) || (rec->core.tid<0)) continue;
 	  
 	  // Parse quality and seq
+	  bool readRev = (rec->core.flag & BAM_FREVERSE);
 	  typedef std::vector<uint8_t> TQuality;
 	  TQuality quality;
 	  quality.resize(rec->core.l_qseq);
@@ -107,6 +108,10 @@ namespace cameo
 	  for (int32_t i = 0; i < rec->core.l_qseq; ++i) {
 	    quality[i] = qualptr[i];
 	    sequence[i] = "=ACMGRSVTWYHKDBN"[bam_seqi(seqptr, i)];
+	  }
+	  if (readRev) {
+	    reverseComplement(sequence);
+	    std::reverse(quality.begin(), quality.end());
 	  }
 
 	  // Parse MM and ML tags (if present)
@@ -138,8 +143,7 @@ namespace cameo
 		  int32_t current = -1;
 		  for(const auto& ptoken : pos_tokens) {
 		    if (ptoken.empty()) continue;
-		    int32_t delta = 0;
-		    delta = std::stoi(ptoken);
+		    int32_t delta = std::stoi(ptoken);
 		    current += (delta + 1);
 		    for(char mc : mod_codes) modhits.push_back(ModHit(current, mc, 255, strand, base));
 		  }
@@ -161,30 +165,22 @@ namespace cameo
 	      for(int32_t i = 0; i < assign; ++i) modhits[i].prob = data[i];
 	    }
 	  }
-
-	  // Reverse read
-	  bool readRev = (rec->core.flag & BAM_FREVERSE);
 	  
-	  // Reorder by read position
-	  if (readRev) reverseComplement(sequence);
-	  std::unordered_map<char, std::vector<int32_t>> base_occurrence_positions;
-	  for (int32_t i = 0; i < (int32_t) sequence.size(); ++i) {
-	    char b = std::toupper(static_cast<unsigned char>(sequence[i]));
-	    base_occurrence_positions[b].push_back(i);
-	  }
-	  // Now create a new vector of ModHit with pos replaced by the absolute read position
+	  // Find read position of As, Cs, ...
+	  std::unordered_map<char, std::vector<int32_t>> basepos;
+	  for (int32_t i = 0; i < (int32_t) sequence.size(); ++i) basepos[std::toupper(static_cast<unsigned char>(sequence[i]))].push_back(i);
+	  
+	  // Replace base positions with absolute read positions
 	  std::vector<ModHit> adjusted_modhits;
 	  adjusted_modhits.reserve(modhits.size());
 	  for (const auto& mh : modhits) {
 	    char ub = std::toupper(static_cast<unsigned char>(mh.base));
  	    char target_base = (mh.strand == '+') ? ub : complement_base(ub);
- 	    auto it = base_occurrence_positions.find(target_base);
-	    if (it == base_occurrence_positions.end()) continue;
+ 	    auto it = basepos.find(target_base);
+	    if (it == basepos.end()) continue;
 	    const auto& occs = it->second;
-	    if (mh.pos < 0 || (std::size_t)mh.pos >= occs.size()) continue;
-	    std::size_t occ_index = (std::size_t) mh.pos;
- 	    int32_t read_pos = occs[occ_index];
-	    adjusted_modhits.push_back(ModHit(read_pos, mh.code, mh.prob, mh.strand, mh.base));
+	    if ((mh.pos < 0) || ((std::size_t)mh.pos >= occs.size())) continue;
+	    adjusted_modhits.push_back(ModHit(occs[mh.pos], mh.code, mh.prob, mh.strand, mh.base));
 	  }
 	  modhits.swap(adjusted_modhits);
 
@@ -209,22 +205,23 @@ namespace cameo
 		  if (cov_plus[rp] < maxval) ++cov_plus[rp];
 		}
 		// Mods
-		auto it = modByPos.find(sp);
+		uint32_t lookUpPos = sp;
+		if (readRev) lookUpPos = rec->core.l_qseq - sp - 1;
+		auto it = modByPos.find(lookUpPos);
 		if (it != modByPos.end()) {
 		  for(const auto& mh : it->second) {
 		    if ((mh.prob == 255) || (mh.prob >= probTh)) {
-		      bool modOnRefPlus = ((mh.strand == '+') != readRev);
 		      if ((mh.code == 'm') || (mh.code == 'M')) {
-			if (modOnRefPlus) {
-			  if (m_plus[rp] < maxval) ++m_plus[rp];
-			} else {
+			if (readRev) {
 			  if (m_minus[rp] < maxval) ++m_minus[rp];
+			} else {
+			  if (m_plus[rp] < maxval) ++m_plus[rp];
 			}
 		      } else if ((mh.code == 'h') || (mh.code == 'H')) {
-			if (modOnRefPlus) {
-			  if (h_plus[rp] < maxval) ++h_plus[rp];
-			} else {
+			if (readRev) {
 			  if (h_minus[rp] < maxval) ++h_minus[rp];
+			} else {
+			  if (h_plus[rp] < maxval) ++h_plus[rp];
 			}
 		      } else {
 			std::cerr << "Warning: Unknown modification code! " << mh.code << std::endl;
@@ -237,9 +234,8 @@ namespace cameo
 	      rp += oplen;
 	    } else if (op == BAM_CINS) {
 	      sp += oplen;
-	    } else if (op == BAM_CSOFT_CLIP) {
+	    } else if ((op == BAM_CSOFT_CLIP) || (op == BAM_CHARD_CLIP)) {
 	      sp += oplen;
-	    } else if (op == BAM_CHARD_CLIP) {
 	    } else if (op == BAM_CREF_SKIP) {
 	      rp += oplen;
 	    } else {
@@ -254,13 +250,12 @@ namespace cameo
 	for(uint32_t i = 0; i < hdr->target_len[refIndex]; ++i) acc[file_c](cov_plus[i] + cov_minus[i]);
 	double sdcov = sqrt(boost::accumulators::variance(acc[file_c]));
 	double avgcov = boost::accumulators::mean(acc[file_c]);
-	//std::cerr << c.files[file_c].string() << ", " << hdr->target_name[refIndex] << ", meancov=" << avgcov << ", sdcov=" << sdcov << std::endl;
+	std::cerr << c.files[file_c].string() << ", " << hdr->target_name[refIndex] << ", meancov=" << avgcov << ", sdcov=" << sdcov << std::endl;
 
 	// Output percent modified per site
-	// Header: file,chrom,1-based-pos,refbase,cov_plus,cov_minus,mod_m_plus,mod_m_minus,mod_h_plus,mod_h_minus,percent_modified(+),percent_modified(-),percent_modified(collapsed)
 	for (uint32_t pos = 0; pos < hdr->target_len[refIndex]; ++pos) {
 	  // optionally count only CpG sites
-	  if (onlyCpG) {
+	  if (c.onlyCpG) {
 	    if (pos + 1 >= hdr->target_len[refIndex]) continue;
 	    char b1 = std::toupper(seq[pos]);
 	    char b2 = std::toupper(seq[pos+1]);

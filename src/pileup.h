@@ -16,6 +16,7 @@
 
 #include <htslib/sam.h>
 
+#include "bed.h"
 #include "util.h"
 
 namespace cameo
@@ -74,6 +75,20 @@ namespace cameo
     boost::posix_time::ptime now = boost::posix_time::second_clock::local_time();
     std::cerr << '[' << boost::posix_time::to_simple_string(now) << "] " << "Methylation scanning" << std::endl;
 
+    // Parse BED
+    typedef std::vector<BedEntry> TChrIntervals;
+    typedef std::vector<TChrIntervals> TRegionsGenome;
+    TRegionsGenome scanRegions;
+    if (c.hasBedFile) {
+      int32_t nreg = _parseBedIntervals(c, scanRegions);
+      if (nreg == 0) {
+	std::cerr << "Error: Couldn't parse BED intervals. Do the chromosome names match?" << std::endl;
+	return 1;
+      } else {
+	std::cout << '[' << boost::posix_time::to_simple_string(boost::posix_time::second_clock::local_time()) << "] Parsed " << nreg << " input regions." << std::endl;
+      }
+    }
+    
     // Calling threshold
     uint8_t probTh = (uint8_t) ((int) (c.minMod * 256));
     
@@ -261,49 +276,113 @@ namespace cameo
 	std::cerr << '[' << boost::posix_time::to_simple_string(now) << "] " << c.sampleName[file_c] << ", " << hdr->target_name[refIndex] << ", running mean cov=" << avgcov << ", SD cov=" << sdcov << std::endl;
 
 	// Output percent modified per site
-	for (uint32_t pos = 0; pos < hdr->target_len[refIndex]; ++pos) {
-	  // CpG sites
-	  bool fwdCpG = true;
-	  bool revCpG = true;
-	  if (c.onlyCpG) {
-	    fwdCpG = false;
-	    revCpG = false;
-	    if (pos + 1 < hdr->target_len[refIndex]) {
-	      char b1 = std::toupper(seq[pos]);
-	      char b2 = std::toupper(seq[pos+1]);
-	      if ((b1 == 'C') && (b2 == 'G')) fwdCpG = true;
-	    }
-	    if (pos > 0) {
-	      char b1 = std::toupper(seq[pos-1]);
-	      char b2 = std::toupper(seq[pos]);
-	      if ((b1 == 'C') && (b2 == 'G')) revCpG = true;
+	if (c.hasBedFile) {
+	  for(uint32_t i = 0; i < scanRegions[refIndex].size(); ++i) {
+	    if ((scanRegions[refIndex][i].start >= 0) && (scanRegions[refIndex][i].end <= hdr->target_len[refIndex])) {
+	      // Aggregate mod counts
+	      uint32_t reg_cov_plus = 0;
+	      uint32_t reg_cov_minus = 0;
+	      uint32_t reg_m_plus = 0;
+	      uint32_t reg_m_minus = 0;
+	      uint32_t reg_h_plus = 0;
+	      uint32_t reg_h_minus = 0;
+	      for (uint32_t pos = scanRegions[refIndex][i].start; pos < scanRegions[refIndex][i].end; ++pos) {
+		// CpG sites
+		bool fwdCpG = true;
+		bool revCpG = true;
+		if (c.onlyCpG) {
+		  fwdCpG = false;
+		  revCpG = false;
+		  if (pos + 1 < hdr->target_len[refIndex]) {
+		    char b1 = std::toupper(seq[pos]);
+		    char b2 = std::toupper(seq[pos+1]);
+		    if ((b1 == 'C') && (b2 == 'G')) fwdCpG = true;
+		  }
+		  if (pos > 0) {
+		    char b1 = std::toupper(seq[pos-1]);
+		    char b2 = std::toupper(seq[pos]);
+		    if ((b1 == 'C') && (b2 == 'G')) revCpG = true;
+		  }
+		}
+		if (fwdCpG) {
+		  reg_cov_plus += cov_plus[pos];
+		  reg_m_plus += m_plus[pos];
+		  reg_h_plus += h_plus[pos];
+		}
+		if (revCpG) {
+		  reg_cov_minus += cov_minus[pos];
+		  reg_m_minus += m_minus[pos];
+		  reg_h_minus += h_minus[pos];
+		}
+	      }
+
+	      // Unstranded
+	      if (c.combineStrands) {
+		double pct_m = ((reg_cov_plus + reg_cov_minus > 0) ? double(reg_m_plus + reg_m_minus) / double(reg_cov_plus + reg_cov_minus) : 0.0);
+		double pct_h = ((reg_cov_plus + reg_cov_minus > 0) ? double(reg_h_plus + reg_h_minus) / double(reg_cov_plus + reg_cov_minus) : 0.0);
+		if (reg_m_plus + reg_m_minus) out << hdr->target_name[refIndex] << "\t" << scanRegions[refIndex][i].start << "\t" << scanRegions[refIndex][i].end << "\t" << c.sampleName[file_c] << "\tm\t*\t" << (reg_m_plus + reg_m_minus) << "\t" << (reg_cov_plus + reg_cov_minus) << "\t" << (boost::format("%1$.4f") % pct_m) << std::endl;
+		if (reg_h_plus + reg_h_minus) out << hdr->target_name[refIndex] << "\t" << scanRegions[refIndex][i].start << "\t" << scanRegions[refIndex][i].end << "\t" << c.sampleName[file_c] << "\th\t*\t" << (reg_h_plus + reg_h_minus) << "\t" << (reg_cov_plus + reg_cov_minus) << "\t" << (boost::format("%1$.4f") % pct_h) << std::endl;
+	      } else {
+		// Pct modified
+		double pct_h_minus = ((reg_cov_minus > 0) ? double(reg_h_minus) / double(reg_cov_minus) : 0.0);
+		double pct_h_plus = ((reg_cov_plus > 0) ? double(reg_h_plus) / double(reg_cov_plus) : 0.0);
+		double pct_m_minus = ((reg_cov_minus > 0) ? double(reg_m_minus) / double(reg_cov_minus) : 0.0);
+		double pct_m_plus = ((reg_cov_plus > 0) ? double(reg_m_plus) / double(reg_cov_plus) : 0.0);
+
+		// Plus strand
+		if (reg_h_plus) out << hdr->target_name[refIndex] << "\t" << scanRegions[refIndex][i].start << "\t" << scanRegions[refIndex][i].end << "\t" << c.sampleName[file_c] << "\th\t+\t" << reg_h_plus << "\t" << reg_cov_plus << "\t" << (boost::format("%1$.4f") % pct_h_plus) << std::endl;
+		if (reg_m_plus) out << hdr->target_name[refIndex] << "\t" << scanRegions[refIndex][i].start << "\t" << scanRegions[refIndex][i].end << "\t" << c.sampleName[file_c] << "\tm\t+\t" << reg_m_plus << "\t" << reg_cov_plus << "\t" << (boost::format("%1$.4f") % pct_m_plus) << std::endl;
+		// Minus strand
+		if (reg_h_minus) out << hdr->target_name[refIndex] << "\t" << scanRegions[refIndex][i].start << "\t" << scanRegions[refIndex][i].end << "\t" << c.sampleName[file_c] << "\th\t-\t" << reg_h_minus << "\t" << reg_cov_minus << "\t" << (boost::format("%1$.4f") % pct_h_minus) << std::endl;
+		if (reg_m_minus) out << hdr->target_name[refIndex] << "\t" << scanRegions[refIndex][i].start << "\t" << scanRegions[refIndex][i].end << "\t" << c.sampleName[file_c] << "\tm\t-\t" << reg_m_minus << "\t" << reg_cov_minus << "\t" << (boost::format("%1$.4f") % pct_m_minus) << std::endl;
+	      }
 	    }
 	  }
-
-	  // Pct modified
-	  double pct_h_minus = ((cov_minus[pos] > 0) ? double(h_minus[pos]) / double(cov_minus[pos]) : 0.0);
-	  double pct_h_plus = ((cov_plus[pos] > 0) ? double(h_plus[pos]) / double(cov_plus[pos]) : 0.0);
-	  double pct_m_minus = ((cov_minus[pos] > 0) ? double(m_minus[pos]) / double(cov_minus[pos]) : 0.0);
-	  double pct_m_plus = ((cov_plus[pos] > 0) ? double(m_plus[pos]) / double(cov_plus[pos]) : 0.0);
-
-	  // Unstranded
-	  if (c.combineStrands) {
-	    if ((c.onlyCpG) && (fwdCpG) && (pos + 1 < hdr->target_len[refIndex])) {
-	      double pct_m = ((cov_plus[pos] + cov_minus[pos+1] > 0) ? double(m_plus[pos] + m_minus[pos+1]) / double(cov_plus[pos] + cov_minus[pos+1]) : 0.0);
-	      double pct_h = ((cov_plus[pos] + cov_minus[pos+1] > 0) ? double(h_plus[pos] + h_minus[pos+1]) / double(cov_plus[pos] + cov_minus[pos+1]) : 0.0);
-	      if (m_plus[pos] + m_minus[pos+1]) out << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\t" << c.sampleName[file_c] << "\tm\t*\t" << (m_plus[pos] + m_minus[pos+1]) << "\t" << (cov_plus[pos] + cov_minus[pos+1]) << "\t" << (boost::format("%1$.4f") % pct_m) << std::endl;
-	      if (h_plus[pos] + h_minus[pos+1]) out << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\t" << c.sampleName[file_c] << "\th\t*\t" << (h_plus[pos] + h_minus[pos+1]) << "\t" << (cov_plus[pos] + cov_minus[pos+1]) << "\t" << (boost::format("%1$.4f") % pct_h) << std::endl;
+	} else {
+	  // No BED input
+	  for (uint32_t pos = 0; pos < hdr->target_len[refIndex]; ++pos) {
+	    // CpG sites
+	    bool fwdCpG = true;
+	    bool revCpG = true;
+	    if (c.onlyCpG) {
+	      fwdCpG = false;
+	      revCpG = false;
+	      if (pos + 1 < hdr->target_len[refIndex]) {
+		char b1 = std::toupper(seq[pos]);
+		char b2 = std::toupper(seq[pos+1]);
+		if ((b1 == 'C') && (b2 == 'G')) fwdCpG = true;
+	      }
+	      if (pos > 0) {
+		char b1 = std::toupper(seq[pos-1]);
+		char b2 = std::toupper(seq[pos]);
+		if ((b1 == 'C') && (b2 == 'G')) revCpG = true;
+	      }
 	    }
-	  } else {
-	    // Plus strand
-	    if (fwdCpG) {
-	      if (h_plus[pos]) out << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\t" << c.sampleName[file_c] << "\th\t+\t" << h_plus[pos] << "\t" << cov_plus[pos] << "\t" << (boost::format("%1$.4f") % pct_h_plus) << std::endl;
-	      if (m_plus[pos]) out << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\t" << c.sampleName[file_c] << "\tm\t+\t" << m_plus[pos] << "\t" << cov_plus[pos] << "\t" << (boost::format("%1$.4f") % pct_m_plus) << std::endl;
-	    }
-	    // Minus strand
-	    if (revCpG) {
-	      if (h_minus[pos]) out << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\t" << c.sampleName[file_c] << "\th\t-\t" << h_minus[pos] << "\t" << cov_minus[pos] << "\t" << (boost::format("%1$.4f") % pct_h_minus) << std::endl;
-	      if (m_minus[pos]) out << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\t" << c.sampleName[file_c] << "\tm\t-\t" << m_minus[pos] << "\t" << cov_minus[pos] << "\t" << (boost::format("%1$.4f") % pct_m_minus) << std::endl;
+
+	    // Unstranded
+	    if (c.combineStrands) {
+	      if ((c.onlyCpG) && (fwdCpG) && (pos + 1 < hdr->target_len[refIndex])) {
+		double pct_m = ((cov_plus[pos] + cov_minus[pos+1] > 0) ? double(m_plus[pos] + m_minus[pos+1]) / double(cov_plus[pos] + cov_minus[pos+1]) : 0.0);
+		double pct_h = ((cov_plus[pos] + cov_minus[pos+1] > 0) ? double(h_plus[pos] + h_minus[pos+1]) / double(cov_plus[pos] + cov_minus[pos+1]) : 0.0);
+		if (m_plus[pos] + m_minus[pos+1]) out << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\t" << c.sampleName[file_c] << "\tm\t*\t" << (m_plus[pos] + m_minus[pos+1]) << "\t" << (cov_plus[pos] + cov_minus[pos+1]) << "\t" << (boost::format("%1$.4f") % pct_m) << std::endl;
+		if (h_plus[pos] + h_minus[pos+1]) out << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\t" << c.sampleName[file_c] << "\th\t*\t" << (h_plus[pos] + h_minus[pos+1]) << "\t" << (cov_plus[pos] + cov_minus[pos+1]) << "\t" << (boost::format("%1$.4f") % pct_h) << std::endl;
+	      }
+	    } else {
+	      double pct_h_minus = ((cov_minus[pos] > 0) ? double(h_minus[pos]) / double(cov_minus[pos]) : 0.0);
+	      double pct_h_plus = ((cov_plus[pos] > 0) ? double(h_plus[pos]) / double(cov_plus[pos]) : 0.0);
+	      double pct_m_minus = ((cov_minus[pos] > 0) ? double(m_minus[pos]) / double(cov_minus[pos]) : 0.0);
+	      double pct_m_plus = ((cov_plus[pos] > 0) ? double(m_plus[pos]) / double(cov_plus[pos]) : 0.0);
+
+	      // Plus strand
+	      if (fwdCpG) {
+		if (h_plus[pos]) out << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\t" << c.sampleName[file_c] << "\th\t+\t" << h_plus[pos] << "\t" << cov_plus[pos] << "\t" << (boost::format("%1$.4f") % pct_h_plus) << std::endl;
+		if (m_plus[pos]) out << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\t" << c.sampleName[file_c] << "\tm\t+\t" << m_plus[pos] << "\t" << cov_plus[pos] << "\t" << (boost::format("%1$.4f") % pct_m_plus) << std::endl;
+	      }
+	      // Minus strand
+	      if (revCpG) {
+		if (h_minus[pos]) out << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\t" << c.sampleName[file_c] << "\th\t-\t" << h_minus[pos] << "\t" << cov_minus[pos] << "\t" << (boost::format("%1$.4f") % pct_h_minus) << std::endl;
+		if (m_minus[pos]) out << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\t" << c.sampleName[file_c] << "\tm\t-\t" << m_minus[pos] << "\t" << cov_minus[pos] << "\t" << (boost::format("%1$.4f") % pct_m_minus) << std::endl;
+	      }
 	    }
 	  }
 	}

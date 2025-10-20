@@ -31,11 +31,13 @@ namespace cameo {
   struct CameoConfig {
     bool onlyCpG;
     bool combineStrands;
+    bool hasBedFile;
     uint16_t minBaseQual;
     uint16_t minMapQual;
     uint32_t maxThreads;
     int32_t nchr;
     float minMod;
+    boost::filesystem::path bedfile;
     boost::filesystem::path outfile;
     std::vector<boost::filesystem::path> files;
     boost::filesystem::path genome;
@@ -73,7 +75,7 @@ namespace cameo {
     generic.add_options()
       ("help,?", "show help message")
       ("genome,g", boost::program_options::value<boost::filesystem::path>(&c.genome), "genome fasta file")
-      ("base-qual,b", boost::program_options::value<uint16_t>(&c.minBaseQual)->default_value(1), "min. base quality")
+      ("base-qual,a", boost::program_options::value<uint16_t>(&c.minBaseQual)->default_value(1), "min. base quality")
       ("map-qual,q", boost::program_options::value<uint16_t>(&c.minMapQual)->default_value(1), "min. mapping quality")
       ("outfile,o", boost::program_options::value<boost::filesystem::path>(&c.outfile), "output pileup table")
       ("threads,t", boost::program_options::value<uint32_t>(&c.maxThreads)->default_value(8), "number of threads")
@@ -82,6 +84,7 @@ namespace cameo {
     boost::program_options::options_description methyl("Methylation options");
     methyl.add_options()
       ("minmod,m", boost::program_options::value<float>(&c.minMod)->default_value(0.8), "min. modification threshold")
+      ("bedfile,b", boost::program_options::value<boost::filesystem::path>(&c.bedfile), "report mods over input BED")
       ("cpg,p", "only CpG counts")
       ("combine,c", "combine strands")
       ;
@@ -121,6 +124,10 @@ namespace cameo {
     // Combine strands
     if (vm.count("combine")) c.combineStrands = true;
     else c.combineStrands = false;
+
+    // Input BED file
+    if (vm.count("bedfile")) c.hasBedFile = true;
+    else c.hasBedFile = false;
     
     // Check reference
     if (!(boost::filesystem::exists(c.genome) && boost::filesystem::is_regular_file(c.genome) && boost::filesystem::file_size(c.genome))) {

@@ -1,5 +1,5 @@
-#ifndef SCAN_H
-#define SCAN_H
+#ifndef PILEUP_H
+#define PILEUP_H
 
 #include <boost/filesystem.hpp>
 #include <boost/algorithm/string.hpp>
@@ -45,6 +45,16 @@ namespace cameo
       idx[file_c] = sam_index_load(samfile[file_c], c.files[file_c].string().c_str());
     }
     bam_hdr_t* hdr = sam_hdr_read(samfile[0]);
+
+    // Output table
+    std::streambuf* buf;
+    std::ofstream of;
+    if(c.outfile.string() != "-") {
+      of.open(c.outfile.string().c_str());
+      buf = of.rdbuf();
+    } else buf = std::cout.rdbuf();
+    std::ostream out(buf);
+    out << "chr\tstart\tend\tsample\tmodbase\tstrand\tmodcount\tcoverage\tfracmod" << std::endl;
 
     // Load FASTA
     char* seq = NULL;
@@ -197,9 +207,9 @@ namespace cameo
 		if (rp >= hdr->target_len[refIndex]) break;
 		// Coverage
 		if (readRev) {
-		  if (cov_minus[rp] < maxval) ++cov_minus[rp];
+		  if ((quality[sp] >= c.minBaseQual) && (cov_minus[rp] < maxval)) ++cov_minus[rp];
 		} else {
-		  if (cov_plus[rp] < maxval) ++cov_plus[rp];
+		  if ((quality[sp] >= c.minBaseQual) && (cov_plus[rp] < maxval)) ++cov_plus[rp];
 		}
 		// Mods
 		uint32_t lookUpPos = sp;
@@ -247,7 +257,8 @@ namespace cameo
 	for(uint32_t i = 0; i < hdr->target_len[refIndex]; ++i) acc[file_c](cov_plus[i] + cov_minus[i]);
 	double sdcov = sqrt(boost::accumulators::variance(acc[file_c]));
 	double avgcov = boost::accumulators::mean(acc[file_c]);
-	std::cerr << c.files[file_c].string() << ", " << hdr->target_name[refIndex] << ", meancov=" << avgcov << ", sdcov=" << sdcov << std::endl;
+	now = boost::posix_time::second_clock::local_time();
+	std::cerr << '[' << boost::posix_time::to_simple_string(now) << "] " << c.sampleName[file_c] << ", " << hdr->target_name[refIndex] << ", running mean cov=" << avgcov << ", SD cov=" << sdcov << std::endl;
 
 	// Output percent modified per site
 	for (uint32_t pos = 0; pos < hdr->target_len[refIndex]; ++pos) {
@@ -270,29 +281,29 @@ namespace cameo
 	  }
 
 	  // Pct modified
-	  double pct_h_minus = ((cov_minus[pos] > 0) ? 100.0 * double(h_minus[pos]) / double(cov_minus[pos]) : 0.0);
-	  double pct_h_plus = ((cov_plus[pos] > 0) ? 100.0 * double(h_plus[pos]) / double(cov_plus[pos]) : 0.0);
-	  double pct_m_minus = ((cov_minus[pos] > 0) ? 100.0 * double(m_minus[pos]) / double(cov_minus[pos]) : 0.0);
-	  double pct_m_plus = ((cov_plus[pos] > 0) ? 100.0 * double(m_plus[pos]) / double(cov_plus[pos]) : 0.0);
+	  double pct_h_minus = ((cov_minus[pos] > 0) ? double(h_minus[pos]) / double(cov_minus[pos]) : 0.0);
+	  double pct_h_plus = ((cov_plus[pos] > 0) ? double(h_plus[pos]) / double(cov_plus[pos]) : 0.0);
+	  double pct_m_minus = ((cov_minus[pos] > 0) ? double(m_minus[pos]) / double(cov_minus[pos]) : 0.0);
+	  double pct_m_plus = ((cov_plus[pos] > 0) ? double(m_plus[pos]) / double(cov_plus[pos]) : 0.0);
 
 	  // Unstranded
 	  if (c.combineStrands) {
 	    if ((c.onlyCpG) && (fwdCpG) && (pos + 1 < hdr->target_len[refIndex])) {
-	      double pct_m = ((cov_plus[pos] + cov_minus[pos+1] > 0) ? 100.0 * double(m_plus[pos] + m_minus[pos+1]) / double(cov_plus[pos] + cov_minus[pos+1]) : 0.0);
-	      double pct_h = ((cov_plus[pos] + cov_minus[pos+1] > 0) ? 100.0 * double(h_plus[pos] + h_minus[pos+1]) / double(cov_plus[pos] + cov_minus[pos+1]) : 0.0);
-	      if (m_plus[pos] + m_minus[pos+1]) std::cerr << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\tm\t" << (cov_plus[pos] + cov_minus[pos+1]) << "\t.\t" << pos << "\t" << (pos + 1) << "\t255,0,0\t" << (cov_plus[pos] + cov_minus[pos+1]) << "\t" << (boost::format("%1$.2f") % pct_m) << "\t" << (m_plus[pos] + m_minus[pos+1]) << std::endl;
-	      if (h_plus[pos] + h_minus[pos+1]) std::cerr << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\th\t" << (cov_plus[pos] + cov_minus[pos+1]) << "\t.\t" << pos << "\t" << (pos + 1) << "\t255,0,0\t" << (cov_plus[pos] + cov_minus[pos+1]) << "\t" << (boost::format("%1$.2f") % pct_h) << "\t" << (h_plus[pos] + h_minus[pos+1]) << std::endl;
+	      double pct_m = ((cov_plus[pos] + cov_minus[pos+1] > 0) ? double(m_plus[pos] + m_minus[pos+1]) / double(cov_plus[pos] + cov_minus[pos+1]) : 0.0);
+	      double pct_h = ((cov_plus[pos] + cov_minus[pos+1] > 0) ? double(h_plus[pos] + h_minus[pos+1]) / double(cov_plus[pos] + cov_minus[pos+1]) : 0.0);
+	      if (m_plus[pos] + m_minus[pos+1]) out << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\t" << c.sampleName[file_c] << "\tm\t*\t" << (m_plus[pos] + m_minus[pos+1]) << "\t" << (cov_plus[pos] + cov_minus[pos+1]) << "\t" << (boost::format("%1$.4f") % pct_m) << std::endl;
+	      if (h_plus[pos] + h_minus[pos+1]) out << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\t" << c.sampleName[file_c] << "\th\t*\t" << (h_plus[pos] + h_minus[pos+1]) << "\t" << (cov_plus[pos] + cov_minus[pos+1]) << "\t" << (boost::format("%1$.4f") % pct_h) << std::endl;
 	    }
 	  } else {
 	    // Plus strand
 	    if (fwdCpG) {
-	      if (h_plus[pos]) std::cerr << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\th\t" << cov_plus[pos] << "\t+\t" << pos << "\t" << (pos + 1) << "\t255,0,0\t" << cov_plus[pos] << "\t" << (boost::format("%1$.2f") % pct_h_plus) << "\t" << h_plus[pos] << std::endl;
-	      if (m_plus[pos]) std::cerr << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\tm\t" << cov_plus[pos] << "\t+\t" << pos << "\t" << (pos + 1) << "\t255,0,0\t" << cov_plus[pos] << "\t" << (boost::format("%1$.2f") % pct_m_plus) << "\t" << m_plus[pos] << std::endl;
+	      if (h_plus[pos]) out << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\t" << c.sampleName[file_c] << "\th\t+\t" << h_plus[pos] << "\t" << cov_plus[pos] << "\t" << (boost::format("%1$.4f") % pct_h_plus) << std::endl;
+	      if (m_plus[pos]) out << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\t" << c.sampleName[file_c] << "\tm\t+\t" << m_plus[pos] << "\t" << cov_plus[pos] << "\t" << (boost::format("%1$.4f") % pct_m_plus) << std::endl;
 	    }
 	    // Minus strand
 	    if (revCpG) {
-	      if (h_minus[pos]) std::cerr << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\th\t" << cov_minus[pos] << "\t-\t" << pos << "\t" << (pos + 1) << "\t255,0,0\t" << cov_minus[pos] << "\t" << (boost::format("%1$.2f") % pct_h_minus) << "\t" << h_minus[pos] << std::endl;
-	      if (m_minus[pos]) std::cerr << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\tm\t" << cov_minus[pos] << "\t-\t" << pos << "\t" << (pos + 1) << "\t255,0,0\t" << cov_minus[pos] << "\t" << (boost::format("%1$.2f") % pct_m_minus) << "\t" << m_minus[pos] << std::endl;
+	      if (h_minus[pos]) out << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\t" << c.sampleName[file_c] << "\th\t-\t" << h_minus[pos] << "\t" << cov_minus[pos] << "\t" << (boost::format("%1$.4f") % pct_h_minus) << std::endl;
+	      if (m_minus[pos]) out << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\t" << c.sampleName[file_c] << "\tm\t-\t" << m_minus[pos] << "\t" << cov_minus[pos] << "\t" << (boost::format("%1$.4f") % pct_m_minus) << std::endl;
 	    }
 	  }
 	}
@@ -303,6 +314,9 @@ namespace cameo
 	seq = NULL;
       }
     }
+
+    // Close file
+    if(c.outfile.string() != "-") of.close();
 
     // Clean-up
     if (fai) fai_destroy(fai);

@@ -25,7 +25,7 @@ inline void
 displayUsage() {
   std::cerr << "Usage: cameo <command> <arguments>" << std::endl;
   std::cerr << std::endl;
-  std::cerr << "    scan        find demethylated promoter" << std::endl;
+  std::cerr << "    pileup        create methylation pileup table" << std::endl;
   std::cerr << std::endl;
 }
 
@@ -55,8 +55,8 @@ int main(int argc, char **argv) {
       bsd();
       return 0;
     }
-    else if ((std::string(argv[1]) == "scan")) {
-      return scan(argc-1,argv+1);
+    else if ((std::string(argv[1]) == "pileup")) {
+      return pileup(argc-1,argv+1);
     }
     std::cerr << "Unrecognized command " << std::string(argv[1]) << std::endl;
     return 1;

@@ -23,7 +23,7 @@
 
 #include "edlib.h"
 #include "util.h"
-#include "scan.h"
+#include "pileup.h"
 
 namespace cameo {
 
@@ -36,7 +36,7 @@ namespace cameo {
     uint32_t maxThreads;
     int32_t nchr;
     float minMod;
-    std::string outprefix;
+    boost::filesystem::path outfile;
     std::vector<boost::filesystem::path> files;
     boost::filesystem::path genome;
     std::vector<std::string> sampleName;
@@ -64,7 +64,7 @@ namespace cameo {
     return 0;
   }
 
-  int scan(int argc, char **argv) {
+  int pileup(int argc, char **argv) {
     CameoConfig c;
    
     // Parameter
@@ -75,7 +75,7 @@ namespace cameo {
       ("genome,g", boost::program_options::value<boost::filesystem::path>(&c.genome), "genome fasta file")
       ("base-qual,b", boost::program_options::value<uint16_t>(&c.minBaseQual)->default_value(1), "min. base quality")
       ("map-qual,q", boost::program_options::value<uint16_t>(&c.minMapQual)->default_value(1), "min. mapping quality")
-      ("outprefix,o", boost::program_options::value<std::string>(&c.outprefix)->default_value("out"), "output prefix")
+      ("outfile,o", boost::program_options::value<boost::filesystem::path>(&c.outfile), "output pileup table")
       ("threads,t", boost::program_options::value<uint32_t>(&c.maxThreads)->default_value(8), "number of threads")
      ;
     
@@ -105,7 +105,7 @@ namespace cameo {
     // Check command line arguments
     if ((vm.count("help")) || (!vm.count("input-file")) || (!vm.count("genome"))) {
       std::cerr << std::endl;
-      std::cerr << "Usage: breaktracer " << argv[0] << " [OPTIONS] -g <ref.fa> <sample1.sort.bam> <sample2.sort.bam> ..." << std::endl;
+      std::cerr << "Usage: cameo " << argv[0] << " [OPTIONS] -g <ref.fa> <sample1.sort.bam> <sample2.sort.bam> ..." << std::endl;
       std::cerr << visible_options << "\n";
       return 0;
     }
@@ -184,11 +184,19 @@ namespace cameo {
       sam_close(samfile);
     }
     checkSampleNames(c);
+
+    // Check outfile
+    if (!vm.count("outfile")) c.outfile = "-";
+    else {
+      if (c.outfile.string() != "-") {
+	if (!_outfileValid(c.outfile)) return 1;
+      }
+    }
     
     // Show cmd
     boost::posix_time::ptime now = boost::posix_time::second_clock::local_time();
     std::cerr << '[' << boost::posix_time::to_simple_string(now) << "] ";
-    std::cerr << "breaktracer ";
+    std::cerr << "cameo ";
     for(int i=0; i<argc; ++i) { std::cerr << argv[i] << ' '; }
     std::cerr << std::endl;
    

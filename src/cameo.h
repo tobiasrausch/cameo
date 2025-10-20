@@ -31,6 +31,7 @@ namespace cameo {
   struct CameoConfig {
     bool onlyCpG;
     bool combineStrands;
+    uint16_t minBaseQual;
     uint16_t minMapQual;
     uint32_t maxThreads;
     int32_t nchr;
@@ -72,6 +73,7 @@ namespace cameo {
     generic.add_options()
       ("help,?", "show help message")
       ("genome,g", boost::program_options::value<boost::filesystem::path>(&c.genome), "genome fasta file")
+      ("base-qual,b", boost::program_options::value<uint16_t>(&c.minBaseQual)->default_value(1), "min. base quality")
       ("map-qual,q", boost::program_options::value<uint16_t>(&c.minMapQual)->default_value(1), "min. mapping quality")
       ("outprefix,o", boost::program_options::value<std::string>(&c.outprefix)->default_value("out"), "output prefix")
       ("threads,t", boost::program_options::value<uint32_t>(&c.maxThreads)->default_value(8), "number of threads")
@@ -80,8 +82,8 @@ namespace cameo {
     boost::program_options::options_description methyl("Methylation options");
     methyl.add_options()
       ("minmod,m", boost::program_options::value<float>(&c.minMod)->default_value(0.8), "min. modification threshold")
-      ("cpg,c", "only CpG counts")
-      ("combine,b", "combine strands")
+      ("cpg,p", "only CpG counts")
+      ("combine,c", "combine strands")
       ;
     
     boost::program_options::options_description hidden("Hidden options");

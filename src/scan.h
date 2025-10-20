@@ -171,8 +171,7 @@ namespace cameo
 	  for (int32_t i = 0; i < (int32_t) sequence.size(); ++i) basepos[std::toupper(static_cast<unsigned char>(sequence[i]))].push_back(i);
 	  
 	  // Replace base positions with absolute read positions
-	  std::vector<ModHit> adjusted_modhits;
-	  adjusted_modhits.reserve(modhits.size());
+	  std::unordered_map<int32_t, std::vector<ModHit> > modByPos;
 	  for (const auto& mh : modhits) {
 	    char ub = std::toupper(static_cast<unsigned char>(mh.base));
  	    char target_base = (mh.strand == '+') ? ub : complement_base(ub);
@@ -180,13 +179,11 @@ namespace cameo
 	    if (it == basepos.end()) continue;
 	    const auto& occs = it->second;
 	    if ((mh.pos < 0) || ((std::size_t)mh.pos >= occs.size())) continue;
-	    adjusted_modhits.push_back(ModHit(occs[mh.pos], mh.code, mh.prob, mh.strand, mh.base));
+	    // Absolute read pos is occs[mh.pos]
+	    if ( (uint16_t) (quality[occs[mh.pos]]) >= c.minBaseQual) {
+	      modByPos[occs[mh.pos]].push_back(ModHit(occs[mh.pos], mh.code, mh.prob, mh.strand, mh.base));
+	    }
 	  }
-	  modhits.swap(adjusted_modhits);
-
-	  // Build map from read position to modification hits
-	  std::unordered_map<int32_t, std::vector<ModHit> > modByPos;
-	  for(const auto& mh : modhits) modByPos[mh.pos].push_back(mh);
 	  
 	  // Parse cigar
 	  uint32_t rp = rec->core.pos; // reference pointer

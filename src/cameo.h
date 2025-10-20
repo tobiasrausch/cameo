@@ -34,7 +34,6 @@ namespace cameo {
     bool hasBedFile;
     uint16_t minBaseQual;
     uint16_t minMapQual;
-    uint32_t maxThreads;
     int32_t nchr;
     float minMod;
     boost::filesystem::path bedfile;
@@ -78,7 +77,6 @@ namespace cameo {
       ("base-qual,a", boost::program_options::value<uint16_t>(&c.minBaseQual)->default_value(1), "min. base quality")
       ("map-qual,q", boost::program_options::value<uint16_t>(&c.minMapQual)->default_value(1), "min. mapping quality")
       ("outfile,o", boost::program_options::value<boost::filesystem::path>(&c.outfile), "output pileup table")
-      ("threads,t", boost::program_options::value<uint32_t>(&c.maxThreads)->default_value(8), "number of threads")
      ;
     
     boost::program_options::options_description methyl("Methylation options");

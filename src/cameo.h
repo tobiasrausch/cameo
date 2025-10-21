@@ -37,7 +37,6 @@ namespace cameo {
     char modCode;
     uint16_t minBaseQual;
     uint16_t minMapQual;
-    int32_t nchr;
     uint32_t peakwin;
     uint32_t peakmedwin;
     uint32_t minCov;
@@ -46,9 +45,9 @@ namespace cameo {
     float peakmethylth;
     boost::filesystem::path bedfile;
     boost::filesystem::path outfile;
-    std::vector<boost::filesystem::path> files;
+    boost::filesystem::path bamfile;
     boost::filesystem::path genome;
-    std::vector<std::string> sampleName;
+    std::string sampleName;
   };
   
   template<typename TConfig>
@@ -92,15 +91,15 @@ namespace cameo {
       ("minmod,m", boost::program_options::value<float>(&c.minMod)->default_value(0.7), "min. mod probability threshold")
       ("maxunmod,u", boost::program_options::value<float>(&c.maxUnmod)->default_value(0.2), "max. mod probability threshold for unmodified")
       ("bedfile,b", boost::program_options::value<boost::filesystem::path>(&c.bedfile), "report mods over input BED")
-      ("peaks,p", "identify (de)methylated regions")
+      ("peaks,k", "identify (de)methylated regions")
       ("cpg,p", "only CpG counts")
       ("combine,c", "combine strands")
       ;
 
     boost::program_options::options_description dmr("(De)methylated regions (requires -p)");
     dmr.add_options()
-      ("movavg,a", boost::program_options::value<uint32_t>(&c.peakwin)->default_value(51), "rolling average window")
-      ("medsize,e", boost::program_options::value<uint32_t>(&c.peakwin)->default_value(501), "rolling median window")
+      ("movavg,a", boost::program_options::value<uint32_t>(&c.peakwin)->default_value(5), "rolling average window")
+      ("medsize,e", boost::program_options::value<uint32_t>(&c.peakmedwin)->default_value(11), "rolling median window")
       ("strand,r", boost::program_options::value<char>(&c.peakStrand)->default_value('*'), "strand [+,-,*]")
       ("mincov,n", boost::program_options::value<uint32_t>(&c.minCov)->default_value(10), "min. coverage of each mod site")
       ("modletter,l", boost::program_options::value<char>(&c.modCode)->default_value('m'), "modification code [m,h]")
@@ -110,7 +109,7 @@ namespace cameo {
     
     boost::program_options::options_description hidden("Hidden options");
     hidden.add_options()
-      ("input-file", boost::program_options::value< std::vector<boost::filesystem::path> >(&c.files), "input file")
+      ("input-file", boost::program_options::value<boost::filesystem::path>(&c.bamfile), "input file")
       ;
    
     boost::program_options::positional_options_description pos_args;
@@ -127,7 +126,7 @@ namespace cameo {
     // Check command line arguments
     if ((vm.count("help")) || (!vm.count("input-file")) || (!vm.count("genome"))) {
       std::cerr << std::endl;
-      std::cerr << "Usage: cameo " << argv[0] << " [OPTIONS] -g <ref.fa> <sample1.sort.bam> <sample2.sort.bam> ..." << std::endl;
+      std::cerr << "Usage: cameo " << argv[0] << " [OPTIONS] -g <ref.fa> <input.bam>" << std::endl;
       std::cerr << visible_options << "\n";
       return 0;
     }
@@ -153,8 +152,8 @@ namespace cameo {
     else c.hasBedFile = false;
 
     // Call DMRs
-    if (vm.count("dmr")) {
-      c.hasBedFile = true; // DMRs are stored as BED intervals
+    if (vm.count("peaks")) {
+      c.hasBedFile = true; // Peaks are stored as BED intervals
       c.callPeaks = true;
     } else c.callPeaks = false;
     
@@ -174,52 +173,38 @@ namespace cameo {
     }
     
     // Check input files
-    c.sampleName.resize(c.files.size());
-    c.nchr = 0;
-    for(unsigned int file_c = 0; file_c < c.files.size(); ++file_c) {
-      if (!(boost::filesystem::exists(c.files[file_c]) && boost::filesystem::is_regular_file(c.files[file_c]) && boost::filesystem::file_size(c.files[file_c]))) {
-	std::cerr << "Alignment file is missing: " << c.files[file_c].string() << std::endl;
-	return 1;
-      }
-      samFile* samfile = sam_open(c.files[file_c].string().c_str(), "r");
-      if (samfile == NULL) {
-	std::cerr << "Fail to open file " << c.files[file_c].string() << std::endl;
-	return 1;
-      }
-      hts_idx_t* idx = sam_index_load(samfile, c.files[file_c].string().c_str());
-      if (idx == NULL) {
-	std::cerr << "Fail to open index for " << c.files[file_c].string() << std::endl;
-	return 1;
-      }
-      bam_hdr_t* hdr = sam_hdr_read(samfile);
-      if (hdr == NULL) {
-	std::cerr << "Fail to open header for " << c.files[file_c].string() << std::endl;
-	return 1;
-      }
-      if (!c.nchr) c.nchr = hdr->n_targets;
-      else {
-	if (c.nchr != hdr->n_targets) {
-	  std::cerr << "BAM files have different number of chromosomes!" << std::endl;
-	  return 1;
-	}
-      }
-      faidx_t* fai = fai_load(c.genome.string().c_str());
-      for(int32_t refIndex=0; refIndex < hdr->n_targets; ++refIndex) {
-	std::string tname(hdr->target_name[refIndex]);
-	if (!faidx_has_seq(fai, tname.c_str())) {
-	  std::cerr << "BAM file chromosome " << hdr->target_name[refIndex] << " is NOT present in your reference file " << c.genome.string() << std::endl;
-	  return 1;
-	}
-      }
-      fai_destroy(fai);
-      std::string sampleName = "unknown";
-      getSMTag(std::string(hdr->text), c.files[file_c].stem().string(), sampleName);
-      c.sampleName[file_c] = sampleName;
-      bam_hdr_destroy(hdr);
-      hts_idx_destroy(idx);
-      sam_close(samfile);
+    if (!(boost::filesystem::exists(c.bamfile) && boost::filesystem::is_regular_file(c.bamfile) && boost::filesystem::file_size(c.bamfile))) {
+      std::cerr << "Alignment file is missing: " << c.bamfile.string() << std::endl;
+      return 1;
     }
-    checkSampleNames(c);
+    samFile* samfile = sam_open(c.bamfile.string().c_str(), "r");
+    if (samfile == NULL) {
+      std::cerr << "Fail to open file " << c.bamfile.string() << std::endl;
+      return 1;
+    }
+    hts_idx_t* idx = sam_index_load(samfile, c.bamfile.string().c_str());
+    if (idx == NULL) {
+      std::cerr << "Fail to open index for " << c.bamfile.string() << std::endl;
+      return 1;
+    }
+    bam_hdr_t* hdr = sam_hdr_read(samfile);
+    if (hdr == NULL) {
+      std::cerr << "Fail to open header for " << c.bamfile.string() << std::endl;
+      return 1;
+    }
+    faidx_t* fai = fai_load(c.genome.string().c_str());
+    for(int32_t refIndex=0; refIndex < hdr->n_targets; ++refIndex) {
+      std::string tname(hdr->target_name[refIndex]);
+      if (!faidx_has_seq(fai, tname.c_str())) {
+	std::cerr << "BAM file chromosome " << hdr->target_name[refIndex] << " is NOT present in your reference file " << c.genome.string() << std::endl;
+	return 1;
+      }
+    }
+    fai_destroy(fai);
+    getSMTag(std::string(hdr->text), c.bamfile.stem().string(), c.sampleName);
+    bam_hdr_destroy(hdr);
+    hts_idx_destroy(idx);
+    sam_close(samfile);
 
     // Check outfile
     if (!vm.count("outfile")) c.outfile = "-";

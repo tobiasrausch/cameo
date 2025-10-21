@@ -32,7 +32,7 @@ namespace cameo
   inline int32_t
   _parseBedIntervals(TConfig const& c, TRegionsGenome& bedRegions) {
     // Open file handles
-    samFile* samfile = sam_open(c.files[0].string().c_str(), "r");
+    samFile* samfile = sam_open(c.bamfile.string().c_str(), "r");
     hts_set_fai_filename(samfile, c.genome.string().c_str());
     bam_hdr_t* hdr = sam_hdr_read(samfile);
 

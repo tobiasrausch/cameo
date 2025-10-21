@@ -32,9 +32,16 @@ namespace cameo
     ModHit(int32_t const p, char const c, uint8_t const r, bool const s, char const b) : pos(p), code(c), prob(r), rev(s), base(b) {}
   };
 
+  
+  template<typename TConfig, typename TPeaks>
+  inline void
+  peakCalling(TConfig const& c, std::vector<float>& modfrac, std::vector<uint32_t>& modpos, TPeaks& peaks) {
+  }
+
+  
   template<typename TConfig>
   inline bool
-  findPromoters(TConfig const& c) {
+  screenMods(TConfig const& c) {
     // Open file handles
     typedef std::vector<samFile*> TSamFile;
     typedef std::vector<hts_idx_t*> TIndex;
@@ -299,6 +306,78 @@ namespace cameo
 	}
 	double avgfail = boost::accumulators::mean(acc[file_c]);
 	std::cerr << '[' << boost::posix_time::to_simple_string(boost::posix_time::second_clock::local_time()) << "] " << c.sampleName[file_c] << ", " << hdr->target_name[refIndex] << ", running failed fraction of mod calls=" << avgfail << std::endl;
+
+	// Identify peaks
+	if (c.callPeaks) {
+	  std::vector<float> modfrac;
+	  std::vector<uint32_t> modpos;
+	  for (uint32_t pos = 0; pos < hdr->target_len[refIndex]; ++pos) {
+	    // CpG sites
+	    bool fwdCpG = true;
+	    bool revCpG = true;
+	    if (c.onlyCpG) {
+	      fwdCpG = false;
+	      revCpG = false;
+	      if (pos + 1 < hdr->target_len[refIndex]) {
+		char b1 = std::toupper(seq[pos]);
+		char b2 = std::toupper(seq[pos+1]);
+		if ((b1 == 'C') && (b2 == 'G')) fwdCpG = true;
+	      }
+	      if (pos > 0) {
+		char b1 = std::toupper(seq[pos-1]);
+		char b2 = std::toupper(seq[pos]);
+		if ((b1 == 'C') && (b2 == 'G')) revCpG = true;
+	      }
+	    }
+	    // Unstranded
+	    if (c.peakStrand == '*') {
+	      if ((c.onlyCpG) && (fwdCpG) && (pos + 1 < hdr->target_len[refIndex])) {
+		uint32_t ucov = m_plus[pos] + h_plus[pos] + unmod_plus[pos] + m_minus[pos+1] + h_minus[pos+1] + unmod_minus[pos+1];
+		if (ucov >= c.minCov) {
+		  modpos.push_back(pos);
+		  if (c.modifiedRegions) {
+		    if (c.modCode == 'h') modfrac.push_back(float(h_plus[pos] + h_minus[pos+1]) / float(ucov));
+		    else modfrac.push_back(float(m_plus[pos] + m_minus[pos+1]) / float(ucov));
+		  } else {
+		    if (c.modCode == 'h') modfrac.push_back(1.0 - float(h_plus[pos] + h_minus[pos+1]) / float(ucov));
+		    else modfrac.push_back(1.0 - float(m_plus[pos] + m_minus[pos+1]) / float(ucov));
+		  }
+		}
+	      }
+	    } else if (c.peakStrand == '+') {
+	      if (fwdCpG) {
+		uint32_t cov_plus = m_plus[pos] + h_plus[pos] + unmod_plus[pos];
+		if (cov_plus >= c.minCov) {
+		  modpos.push_back(pos);
+		  if (c.modifiedRegions) {
+		    if (c.modCode == 'h') modfrac.push_back(float(h_plus[pos]) / float(cov_plus));
+		    else modfrac.push_back(float(m_plus[pos]) / float(cov_plus));
+		  } else {
+		    if (c.modCode == 'h') modfrac.push_back(1.0 - float(h_plus[pos]) / float(cov_plus));
+		    else modfrac.push_back(1.0 - float(m_plus[pos]) / float(cov_plus));
+		  }
+		}
+	      }
+	    } else {
+	      if (revCpG) {
+		uint32_t cov_minus = m_minus[pos] + h_minus[pos] + unmod_minus[pos];
+		if (cov_minus >= c.minCov) {
+		  modpos.push_back(pos);
+		  if (c.modifiedRegions) {
+		    if (c.modCode == 'h') modfrac.push_back(float(h_minus[pos]) / float(cov_minus));
+		    else modfrac.push_back(float(m_minus[pos]) / float(cov_minus));
+		  } else {
+		    if (c.modCode == 'h') modfrac.push_back(1.0 - float(h_minus[pos]) / float(cov_minus));
+		    else modfrac.push_back(1.0 - float(m_minus[pos]) / float(cov_minus));
+		  }
+		}
+	      }
+	    }
+	  }
+
+	  // call peaks
+	  peakCalling(c, modfrac, modpos, scanRegions);
+	}
 
 	// Output percent modified per site
 	if (c.hasBedFile) {

@@ -31,14 +31,19 @@ namespace cameo {
     bool onlyCpG;
     bool combineStrands;
     bool hasBedFile;
+    bool callPeaks;
+    bool modifiedRegions;
+    char peakStrand;
+    char modCode;
     uint16_t minBaseQual;
     uint16_t minMapQual;
     int32_t nchr;
-    uint32_t dmrwin;
-    uint32_t dmrmedwin;
+    uint32_t peakwin;
+    uint32_t peakmedwin;
+    uint32_t minCov;
     float minMod;
     float maxUnmod;
-    float dmrmethylth;
+    float peakmethylth;
     boost::filesystem::path bedfile;
     boost::filesystem::path outfile;
     std::vector<boost::filesystem::path> files;
@@ -54,8 +59,8 @@ namespace cameo {
     ProfilerStart("cameo.prof");
 #endif
 
-    // Search promoters
-    findPromoters(c);
+    // Aggregate modifications
+    screenMods(c);
     
 #ifdef PROFILE
     ProfilerStop();
@@ -87,16 +92,20 @@ namespace cameo {
       ("minmod,m", boost::program_options::value<float>(&c.minMod)->default_value(0.7), "min. mod probability threshold")
       ("maxunmod,u", boost::program_options::value<float>(&c.maxUnmod)->default_value(0.2), "max. mod probability threshold for unmodified")
       ("bedfile,b", boost::program_options::value<boost::filesystem::path>(&c.bedfile), "report mods over input BED")
-      ("dmr,d", "identify demethylated regions")
+      ("peaks,p", "identify (de)methylated regions")
       ("cpg,p", "only CpG counts")
       ("combine,c", "combine strands")
       ;
 
-    boost::program_options::options_description dmr("Demethylated regions (DMRs, requires -d)");
+    boost::program_options::options_description dmr("(De)methylated regions (requires -p)");
     dmr.add_options()
-      ("movavg,a", boost::program_options::value<uint32_t>(&c.dmrwin)->default_value(51), "rolling average window")
-      ("medsize,e", boost::program_options::value<uint32_t>(&c.dmrmedwin)->default_value(501), "rolling median window")
-      ("thres,t", boost::program_options::value<float>(&c.dmrmethylth)->default_value(0.35), "max. methylation fraction")
+      ("movavg,a", boost::program_options::value<uint32_t>(&c.peakwin)->default_value(51), "rolling average window")
+      ("medsize,e", boost::program_options::value<uint32_t>(&c.peakwin)->default_value(501), "rolling median window")
+      ("strand,r", boost::program_options::value<char>(&c.peakStrand)->default_value('*'), "strand [+,-,*]")
+      ("mincov,n", boost::program_options::value<uint32_t>(&c.minCov)->default_value(10), "min. coverage of each mod site")
+      ("modletter,l", boost::program_options::value<char>(&c.modCode)->default_value('m'), "modification code [m,h]")
+      ("thres,t", boost::program_options::value<float>(&c.peakmethylth)->default_value(0.8), "min. (un)modified fraction")
+      ("modified,f", "identify peaks in modified signal instead of unmodified")
       ;
     
     boost::program_options::options_description hidden("Hidden options");
@@ -135,9 +144,19 @@ namespace cameo {
     if (vm.count("combine")) c.combineStrands = true;
     else c.combineStrands = false;
 
+    // Modified regions
+    if (vm.count("modified")) c.modifiedRegions = true;
+    else c.modifiedRegions = false;
+
     // Input BED file
     if (vm.count("bedfile")) c.hasBedFile = true;
     else c.hasBedFile = false;
+
+    // Call DMRs
+    if (vm.count("dmr")) {
+      c.hasBedFile = true; // DMRs are stored as BED intervals
+      c.callPeaks = true;
+    } else c.callPeaks = false;
     
     // Check reference
     if (!(boost::filesystem::exists(c.genome) && boost::filesystem::is_regular_file(c.genome) && boost::filesystem::file_size(c.genome))) {

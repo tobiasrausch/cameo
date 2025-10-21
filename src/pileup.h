@@ -302,12 +302,13 @@ namespace cameo
 
 	// Output percent modified per site
 	if (c.hasBedFile) {
-	  /*
 	  for(uint32_t i = 0; i < scanRegions[refIndex].size(); ++i) {
 	    if ((scanRegions[refIndex][i].start >= 0) && (scanRegions[refIndex][i].end <= hdr->target_len[refIndex])) {
 	      // Aggregate mod counts
-	      uint32_t reg_cov_plus = 0;
-	      uint32_t reg_cov_minus = 0;
+	      uint32_t reg_unmod_plus = 0;
+	      uint32_t reg_unmod_minus = 0;
+	      uint32_t reg_uncertain_plus = 0;
+	      uint32_t reg_uncertain_minus = 0;
 	      uint32_t reg_m_plus = 0;
 	      uint32_t reg_m_minus = 0;
 	      uint32_t reg_h_plus = 0;
@@ -331,40 +332,46 @@ namespace cameo
 		  }
 		}
 		if (fwdCpG) {
-		  reg_cov_plus += cov_plus[pos];
+		  reg_unmod_plus += unmod_plus[pos];
+		  reg_uncertain_plus += uncertain_plus[pos];
 		  reg_m_plus += m_plus[pos];
 		  reg_h_plus += h_plus[pos];
 		}
 		if (revCpG) {
-		  reg_cov_minus += cov_minus[pos];
+		  reg_unmod_minus += unmod_minus[pos];
+		  reg_uncertain_minus += uncertain_minus[pos];				  
 		  reg_m_minus += m_minus[pos];
 		  reg_h_minus += h_minus[pos];
 		}
 	      }
-
 	      // Unstranded
 	      if (c.combineStrands) {
-		double pct_m = ((reg_cov_plus + reg_cov_minus > 0) ? double(reg_m_plus + reg_m_minus) / double(reg_cov_plus + reg_cov_minus) : 0.0);
-		double pct_h = ((reg_cov_plus + reg_cov_minus > 0) ? double(reg_h_plus + reg_h_minus) / double(reg_cov_plus + reg_cov_minus) : 0.0);
-		if (reg_m_plus + reg_m_minus) out << hdr->target_name[refIndex] << "\t" << scanRegions[refIndex][i].start << "\t" << scanRegions[refIndex][i].end << "\t" << c.sampleName[file_c] << "\tm\t*\t" << (reg_m_plus + reg_m_minus) << "\t" << (reg_cov_plus + reg_cov_minus) << "\t" << (boost::format("%1$.4f") % pct_m) << std::endl;
-		if (reg_h_plus + reg_h_minus) out << hdr->target_name[refIndex] << "\t" << scanRegions[refIndex][i].start << "\t" << scanRegions[refIndex][i].end << "\t" << c.sampleName[file_c] << "\th\t*\t" << (reg_h_plus + reg_h_minus) << "\t" << (reg_cov_plus + reg_cov_minus) << "\t" << (boost::format("%1$.4f") % pct_h) << std::endl;
+		uint32_t unstranded_cov = reg_m_plus + reg_h_plus + reg_unmod_plus + reg_m_minus + reg_h_minus + reg_unmod_minus;
+		if (unstranded_cov > 0) {
+		  double pct_h = double(reg_h_plus + reg_h_minus) / double(unstranded_cov);
+		  double pct_m = double(reg_m_plus + reg_m_minus) / double(unstranded_cov);
+		  out << hdr->target_name[refIndex] << "\t" << scanRegions[refIndex][i].start << "\t" << scanRegions[refIndex][i].end << "\t" << c.sampleName[file_c] << "\th\t*\t" << (reg_h_plus + reg_h_minus) << "\t" << (reg_unmod_plus + reg_unmod_minus) << "\t" << (reg_m_plus + reg_m_minus) << "\t" << unstranded_cov << "\t" << (reg_uncertain_plus + reg_uncertain_minus) << "\t" << (boost::format("%1$.4f") % pct_h) << std::endl;
+		  out << hdr->target_name[refIndex] << "\t" << scanRegions[refIndex][i].start << "\t" << scanRegions[refIndex][i].end << "\t" << c.sampleName[file_c] << "\tm\t*\t" << (reg_m_plus + reg_m_minus) << "\t" << (reg_unmod_plus + reg_unmod_minus) << "\t" << (reg_h_plus + reg_h_minus) << "\t" << unstranded_cov << "\t" << (reg_uncertain_plus + reg_uncertain_minus) << "\t" << (boost::format("%1$.4f") % pct_m) << std::endl;
+		}
 	      } else {
-		// Pct modified
-		double pct_h_minus = ((reg_cov_minus > 0) ? double(reg_h_minus) / double(reg_cov_minus) : 0.0);
-		double pct_h_plus = ((reg_cov_plus > 0) ? double(reg_h_plus) / double(reg_cov_plus) : 0.0);
-		double pct_m_minus = ((reg_cov_minus > 0) ? double(reg_m_minus) / double(reg_cov_minus) : 0.0);
-		double pct_m_plus = ((reg_cov_plus > 0) ? double(reg_m_plus) / double(reg_cov_plus) : 0.0);
-
 		// Plus strand
-		if (reg_h_plus) out << hdr->target_name[refIndex] << "\t" << scanRegions[refIndex][i].start << "\t" << scanRegions[refIndex][i].end << "\t" << c.sampleName[file_c] << "\th\t+\t" << reg_h_plus << "\t" << reg_cov_plus << "\t" << (boost::format("%1$.4f") % pct_h_plus) << std::endl;
-		if (reg_m_plus) out << hdr->target_name[refIndex] << "\t" << scanRegions[refIndex][i].start << "\t" << scanRegions[refIndex][i].end << "\t" << c.sampleName[file_c] << "\tm\t+\t" << reg_m_plus << "\t" << reg_cov_plus << "\t" << (boost::format("%1$.4f") % pct_m_plus) << std::endl;
-		// Minus strand
-		if (reg_h_minus) out << hdr->target_name[refIndex] << "\t" << scanRegions[refIndex][i].start << "\t" << scanRegions[refIndex][i].end << "\t" << c.sampleName[file_c] << "\th\t-\t" << reg_h_minus << "\t" << reg_cov_minus << "\t" << (boost::format("%1$.4f") % pct_h_minus) << std::endl;
-		if (reg_m_minus) out << hdr->target_name[refIndex] << "\t" << scanRegions[refIndex][i].start << "\t" << scanRegions[refIndex][i].end << "\t" << c.sampleName[file_c] << "\tm\t-\t" << reg_m_minus << "\t" << reg_cov_minus << "\t" << (boost::format("%1$.4f") % pct_m_minus) << std::endl;
+		uint32_t reg_cov_plus = reg_m_plus + reg_h_plus + reg_unmod_plus;
+		if (reg_cov_plus) {
+		  double pct_h_plus = double(reg_h_plus) / double(reg_cov_plus);
+		  double pct_m_plus = double(reg_m_plus) / double(reg_cov_plus);
+		  out << hdr->target_name[refIndex] << "\t" << scanRegions[refIndex][i].start << "\t" << scanRegions[refIndex][i].end << "\t" << c.sampleName[file_c] << "\th\t+\t" << reg_h_plus << "\t" << reg_unmod_plus << "\t" << reg_m_plus << "\t" << reg_cov_plus << "\t" << reg_uncertain_plus << "\t" << (boost::format("%1$.4f") % pct_h_plus) << std::endl;
+		  out << hdr->target_name[refIndex] << "\t" << scanRegions[refIndex][i].start << "\t" << scanRegions[refIndex][i].end << "\t" << c.sampleName[file_c] << "\tm\t+\t" << reg_m_plus << "\t" << reg_unmod_plus << "\t" << reg_h_plus << "\t" << reg_cov_plus << "\t" << reg_uncertain_plus << "\t" << (boost::format("%1$.4f") % pct_m_plus) << std::endl;
+		}
+		uint32_t reg_cov_minus = reg_m_minus + reg_h_minus + reg_unmod_minus;
+		if (reg_cov_minus) {
+		  double pct_h_minus = double(reg_h_minus) / double(reg_cov_minus);
+		  double pct_m_minus = double(reg_m_minus) / double(reg_cov_minus);
+		  out << hdr->target_name[refIndex] << "\t" << scanRegions[refIndex][i].start << "\t" << scanRegions[refIndex][i].end << "\t" << c.sampleName[file_c] << "\th\t-\t" << reg_h_minus << "\t" << reg_unmod_minus << "\t" << reg_m_minus << "\t" << reg_cov_minus << "\t" << reg_uncertain_minus << "\t" << (boost::format("%1$.4f") % pct_h_minus) << std::endl;
+		  out << hdr->target_name[refIndex] << "\t" << scanRegions[refIndex][i].start << "\t" << scanRegions[refIndex][i].end << "\t" << c.sampleName[file_c] << "\tm\t-\t" << reg_m_minus << "\t" << reg_unmod_minus << "\t" << reg_h_minus << "\t" << reg_cov_minus << "\t" << reg_uncertain_minus << "\t" << (boost::format("%1$.4f") % pct_m_minus) << std::endl;
+		}
 	      }
 	    }
 	  }
-	  */
 	} else {
 	  // No BED input
 	  for (uint32_t pos = 0; pos < hdr->target_len[refIndex]; ++pos) {

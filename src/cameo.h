@@ -83,7 +83,7 @@ namespace cameo {
     boost::program_options::options_description methyl("Methylation options");
     methyl.add_options()
       ("minmod,m", boost::program_options::value<float>(&c.minMod)->default_value(0.7), "min. mod probability threshold")
-      ("maxunmod,u", boost::program_options::value<float>(&c.maxUnmod)->default_value(0.1), "max. mod probability threshold for unmodified")
+      ("maxunmod,u", boost::program_options::value<float>(&c.maxUnmod)->default_value(0.2), "max. mod probability threshold for unmodified")
       ("bedfile,b", boost::program_options::value<boost::filesystem::path>(&c.bedfile), "report mods over input BED")
       ("cpg,p", "only CpG counts")
       ("combine,c", "combine strands")

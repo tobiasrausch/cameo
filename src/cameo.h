@@ -81,8 +81,9 @@ namespace cameo {
     generic.add_options()
       ("help,?", "show help message")
       ("genome,g", boost::program_options::value<boost::filesystem::path>(&c.genome), "genome fasta file")
-      ("base-qual,s", boost::program_options::value<uint16_t>(&c.minBaseQual)->default_value(1), "min. base quality")
+      ("base-qual,b", boost::program_options::value<uint16_t>(&c.minBaseQual)->default_value(1), "min. base quality")
       ("map-qual,q", boost::program_options::value<uint16_t>(&c.minMapQual)->default_value(1), "min. mapping quality")
+      ("sample,s", boost::program_options::value<std::string>(&c.sampleName), "sample name")
       ("outfile,o", boost::program_options::value<boost::filesystem::path>(&c.outfile), "output pileup table")
      ;
     
@@ -90,7 +91,7 @@ namespace cameo {
     methyl.add_options()
       ("minmod,m", boost::program_options::value<float>(&c.minMod)->default_value(0.7), "min. mod probability threshold")
       ("maxunmod,u", boost::program_options::value<float>(&c.maxUnmod)->default_value(0.2), "max. mod probability threshold for unmodified")
-      ("bedfile,b", boost::program_options::value<boost::filesystem::path>(&c.bedfile), "report mods over input BED")
+      ("bedfile,f", boost::program_options::value<boost::filesystem::path>(&c.bedfile), "report mods over input BED")
       ("peaks,k", "identify (de)methylated regions")
       ("cpg,p", "only CpG counts")
       ("combine,c", "combine strands")
@@ -104,7 +105,7 @@ namespace cameo {
       ("mincov,n", boost::program_options::value<uint32_t>(&c.minCov)->default_value(10), "min. coverage of each mod site")
       ("modletter,l", boost::program_options::value<char>(&c.modCode)->default_value('m'), "modification code [m,h]")
       ("thres,t", boost::program_options::value<float>(&c.peakmethylth)->default_value(0.8), "min. (un)modified fraction")
-      ("modified,f", "identify peaks in modified signal instead of unmodified")
+      ("modified,i", "identify peaks in modified signal instead of unmodified")
       ;
     
     boost::program_options::options_description hidden("Hidden options");
@@ -201,7 +202,9 @@ namespace cameo {
       }
     }
     fai_destroy(fai);
-    getSMTag(std::string(hdr->text), c.bamfile.stem().string(), c.sampleName);
+    // Get sample name
+    if (!vm.count("sample")) getSMTag(std::string(hdr->text), c.bamfile.stem().string(), c.sampleName);
+    // Close files
     bam_hdr_destroy(hdr);
     hts_idx_destroy(idx);
     sam_close(samfile);

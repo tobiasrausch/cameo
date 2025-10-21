@@ -26,10 +26,10 @@ namespace cameo
     int32_t pos;
     char code;
     uint8_t prob;
-    char strand;
+    bool rev;
     char base;
 
-    ModHit(int32_t const p, char const c, uint8_t const r, char const s, char const b) : pos(p), code(c), prob(r), strand(s), base(b) {}
+    ModHit(int32_t const p, char const c, uint8_t const r, bool const s, char const b) : pos(p), code(c), prob(r), rev(s), base(b) {}
   };
 
   template<typename TConfig>
@@ -55,7 +55,7 @@ namespace cameo
       buf = of.rdbuf();
     } else buf = std::cout.rdbuf();
     std::ostream out(buf);
-    out << "chr\tstart\tend\tsample\tmodbase\tstrand\tmodcount\tcoverage\tfracmod" << std::endl;
+    out << "chr\tstart\tend\tsample\tmodbase\tstrand\tmodcount\tunmod\tothermod\tcoverage\tfail\tfracmod" << std::endl;
 
     // Load FASTA
     char* seq = NULL;
@@ -90,7 +90,8 @@ namespace cameo
     }
     
     // Calling threshold
-    uint8_t probTh = (uint8_t) ((int) (c.minMod * 256));
+    uint8_t probModTh = (uint8_t) ((int) (c.minMod * 256));
+    uint8_t probUnmodTh = (uint8_t) ((int) (c.maxUnmod * 256));
     
     // Iterate chromosomes
     for(int32_t refIndex=0; refIndex < (int32_t) hdr->n_targets; ++refIndex) {
@@ -105,8 +106,10 @@ namespace cameo
 
 	typedef uint16_t TCovValue;
 	TCovValue maxval = std::numeric_limits<TCovValue>::max();
-	std::vector<TCovValue> cov_plus(hdr->target_len[refIndex], 0);
-	std::vector<TCovValue> cov_minus(hdr->target_len[refIndex], 0);
+	std::vector<TCovValue> unmod_plus(hdr->target_len[refIndex], 0);
+	std::vector<TCovValue> unmod_minus(hdr->target_len[refIndex], 0);
+	std::vector<TCovValue> uncertain_plus(hdr->target_len[refIndex], 0);
+	std::vector<TCovValue> uncertain_minus(hdr->target_len[refIndex], 0);
 	std::vector<TCovValue> m_plus(hdr->target_len[refIndex], 0);
 	std::vector<TCovValue> m_minus(hdr->target_len[refIndex], 0);
 	std::vector<TCovValue> h_plus(hdr->target_len[refIndex], 0);
@@ -122,7 +125,7 @@ namespace cameo
 	  if ((rec->core.qual < c.minMapQual) || (rec->core.tid<0)) continue;
 	  
 	  // Parse quality and seq
-	  bool readRev = (rec->core.flag & BAM_FREVERSE);
+	  bool readRev = (bool) (rec->core.flag & BAM_FREVERSE);
 	  typedef std::vector<uint8_t> TQuality;
 	  TQuality quality;
 	  quality.resize(rec->core.l_qseq);
@@ -134,10 +137,8 @@ namespace cameo
 	    quality[i] = qualptr[i];
 	    sequence[i] = "=ACMGRSVTWYHKDBN"[bam_seqi(seqptr, i)];
 	  }
-	  if (readRev) {
-	    reverseComplement(sequence);
-	    std::reverse(quality.begin(), quality.end());
-	  }
+	  std::string fwdseq = sequence;
+	  if (readRev) reverseComplement(fwdseq);
 
 	  // Parse MM and ML tags (if present)
 	  std::vector<ModHit> modhits;
@@ -154,6 +155,8 @@ namespace cameo
 	      char base = tok[idx_tok++];
 	      if (idx_tok >= tok.size()) continue;
 	      char strand = tok[idx_tok++];
+	      bool revMod = false;
+	      if (strand == '-') revMod = true;
 	      std::string mod_codes;
 	      while ((idx_tok < tok.size()) && (tok[idx_tok] != ',')) {
 		char ch = tok[idx_tok++];
@@ -170,7 +173,7 @@ namespace cameo
 		    if (ptoken.empty()) continue;
 		    int32_t delta = std::stoi(ptoken);
 		    current += (delta + 1);
-		    for(char mc : mod_codes) modhits.push_back(ModHit(current, mc, 255, strand, base));
+		    for(char mc : mod_codes) modhits.push_back(ModHit(current, mc, 255, revMod, base));
 		  }
 		}
 	      }
@@ -193,20 +196,20 @@ namespace cameo
 	  
 	  // Find read position of As, Cs, ...
 	  std::unordered_map<char, std::vector<int32_t>> basepos;
-	  for (int32_t i = 0; i < (int32_t) sequence.size(); ++i) basepos[std::toupper(static_cast<unsigned char>(sequence[i]))].push_back(i);
+	  for (int32_t i = 0; i < (int32_t) fwdseq.size(); ++i) basepos[std::toupper(static_cast<unsigned char>(fwdseq[i]))].push_back(i);
 	  
 	  // Replace base positions with absolute read positions
 	  std::unordered_map<int32_t, std::vector<ModHit> > modByPos;
 	  for (const auto& mh : modhits) {
 	    char ub = std::toupper(static_cast<unsigned char>(mh.base));
- 	    char target_base = (mh.strand == '+') ? ub : complement_base(ub);
+ 	    char target_base = (mh.rev) ? complement_base(ub) : ub;
  	    auto it = basepos.find(target_base);
 	    if (it == basepos.end()) continue;
 	    const auto& occs = it->second;
 	    if ((mh.pos < 0) || ((std::size_t)mh.pos >= occs.size())) continue;
 	    // Absolute read pos is occs[mh.pos]
 	    if ( (uint16_t) (quality[occs[mh.pos]]) >= c.minBaseQual) {
-	      modByPos[occs[mh.pos]].push_back(ModHit(occs[mh.pos], mh.code, mh.prob, mh.strand, mh.base));
+	      modByPos[occs[mh.pos]].push_back(ModHit(occs[mh.pos], mh.code, mh.prob, mh.rev, mh.base));
 	    }
 	  }
 	  
@@ -220,33 +223,51 @@ namespace cameo
 	    if ((op == BAM_CMATCH) || (op == BAM_CEQUAL) || (op == BAM_CDIFF)) {
 	      for(uint32_t k = 0; k < oplen; ++k, ++rp, ++sp) {
 		if (rp >= hdr->target_len[refIndex]) break;
-		// Coverage
-		if (readRev) {
-		  if ((quality[sp] >= c.minBaseQual) && (cov_minus[rp] < maxval)) ++cov_minus[rp];
-		} else {
-		  if ((quality[sp] >= c.minBaseQual) && (cov_plus[rp] < maxval)) ++cov_plus[rp];
-		}
-		// Mods
-		uint32_t lookUpPos = sp;
-		if (readRev) lookUpPos = rec->core.l_qseq - sp - 1;
-		auto it = modByPos.find(lookUpPos);
-		if (it != modByPos.end()) {
-		  for(const auto& mh : it->second) {
-		    if ((mh.prob == 255) || (mh.prob >= probTh)) {
-		      if ((mh.code == 'm') || (mh.code == 'M')) {
+		// Filter for base quality
+		if (quality[sp] >= c.minBaseQual) {
+		  uint32_t lookUpPos = sp;
+		  if (readRev) lookUpPos = rec->core.l_qseq - sp - 1;
+		  auto it = modByPos.find(lookUpPos);
+		  if (it != modByPos.end()) {
+		    uint32_t unmod = 0;
+		    uint32_t uncertain = 0;
+		    std::set<char> modmatch;
+		    for(const auto& mh : it->second) {
+		      if (((mh.rev == readRev) && (sequence[sp] == mh.base)) || ((mh.rev != readRev) && (sequence[sp] == complement_base(mh.base)))) {
+			if (mh.prob >= probModTh) modmatch.insert(mh.code);
+			if (mh.prob > probUnmodTh) ++uncertain;
+			else ++unmod;
+		      }
+		    }
+		    if (modmatch.size() == 1) {
+		      char code = *(modmatch.begin());
+		      if ((code == 'm') || (code == 'M')) {
 			if (readRev) {
 			  if (m_minus[rp] < maxval) ++m_minus[rp];
 			} else {
 			  if (m_plus[rp] < maxval) ++m_plus[rp];
 			}
-		      } else if ((mh.code == 'h') || (mh.code == 'H')) {
+		      } else if ((code == 'h') || (code == 'H')) {
 			if (readRev) {
 			  if (h_minus[rp] < maxval) ++h_minus[rp];
 			} else {
 			  if (h_plus[rp] < maxval) ++h_plus[rp];
 			}
 		      } else {
-			std::cerr << "Warning: Unknown modification code! " << mh.code << std::endl;
+			std::cerr << "Warning: Unknown modification code! " << code << std::endl;
+		      }
+		    } else if ((modmatch.size() > 1) || (uncertain)) {
+		      // Fail
+		      if (readRev) {
+			if (uncertain_minus[rp] < maxval) ++uncertain_minus[rp];
+		      } else {
+			if (uncertain_plus[rp] < maxval) ++uncertain_plus[rp];
+		      }
+		    } else {
+		      if (readRev) {
+			if (unmod_minus[rp] < maxval) ++unmod_minus[rp];
+		      } else {
+			if (unmod_plus[rp] < maxval) ++unmod_plus[rp];
 		      }
 		    }
 		  }
@@ -269,14 +290,19 @@ namespace cameo
 	hts_itr_destroy(iter);
 	
 	// Summarize coverage for this chromosome
-	for(uint32_t i = 0; i < hdr->target_len[refIndex]; ++i) acc[file_c](cov_plus[i] + cov_minus[i]);
-	double sdcov = sqrt(boost::accumulators::variance(acc[file_c]));
-	double avgcov = boost::accumulators::mean(acc[file_c]);
-	now = boost::posix_time::second_clock::local_time();
-	std::cerr << '[' << boost::posix_time::to_simple_string(now) << "] " << c.sampleName[file_c] << ", " << hdr->target_name[refIndex] << ", running mean cov=" << avgcov << ", SD cov=" << sdcov << std::endl;
+	for(uint32_t pos = 0; pos < hdr->target_len[refIndex]; ++pos) {
+	  uint32_t total_cov = m_plus[pos] + h_plus[pos] + unmod_plus[pos] + m_minus[pos] + h_minus[pos] + unmod_minus[pos] + uncertain_plus[pos] + uncertain_minus[pos];
+	  if (total_cov > 0) {
+	    double failfrac = (double) (uncertain_plus[pos] + uncertain_minus[pos]) / (double) (total_cov);
+	    acc[file_c](failfrac);
+	  }
+	}
+	double avgfail = boost::accumulators::mean(acc[file_c]);
+	std::cerr << '[' << boost::posix_time::to_simple_string(boost::posix_time::second_clock::local_time()) << "] " << c.sampleName[file_c] << ", " << hdr->target_name[refIndex] << ", running failed fraction of mod calls=" << avgfail << std::endl;
 
 	// Output percent modified per site
 	if (c.hasBedFile) {
+	  /*
 	  for(uint32_t i = 0; i < scanRegions[refIndex].size(); ++i) {
 	    if ((scanRegions[refIndex][i].start >= 0) && (scanRegions[refIndex][i].end <= hdr->target_len[refIndex])) {
 	      // Aggregate mod counts
@@ -338,6 +364,7 @@ namespace cameo
 	      }
 	    }
 	  }
+	  */
 	} else {
 	  // No BED input
 	  for (uint32_t pos = 0; pos < hdr->target_len[refIndex]; ++pos) {
@@ -362,26 +389,34 @@ namespace cameo
 	    // Unstranded
 	    if (c.combineStrands) {
 	      if ((c.onlyCpG) && (fwdCpG) && (pos + 1 < hdr->target_len[refIndex])) {
-		double pct_m = ((cov_plus[pos] + cov_minus[pos+1] > 0) ? double(m_plus[pos] + m_minus[pos+1]) / double(cov_plus[pos] + cov_minus[pos+1]) : 0.0);
-		double pct_h = ((cov_plus[pos] + cov_minus[pos+1] > 0) ? double(h_plus[pos] + h_minus[pos+1]) / double(cov_plus[pos] + cov_minus[pos+1]) : 0.0);
-		if (m_plus[pos] + m_minus[pos+1]) out << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\t" << c.sampleName[file_c] << "\tm\t*\t" << (m_plus[pos] + m_minus[pos+1]) << "\t" << (cov_plus[pos] + cov_minus[pos+1]) << "\t" << (boost::format("%1$.4f") % pct_m) << std::endl;
-		if (h_plus[pos] + h_minus[pos+1]) out << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\t" << c.sampleName[file_c] << "\th\t*\t" << (h_plus[pos] + h_minus[pos+1]) << "\t" << (cov_plus[pos] + cov_minus[pos+1]) << "\t" << (boost::format("%1$.4f") % pct_h) << std::endl;
+		uint32_t unstranded_cov = m_plus[pos] + h_plus[pos] + unmod_plus[pos] + m_minus[pos+1] + h_minus[pos+1] + unmod_minus[pos+1];
+		if (unstranded_cov > 0) {
+		  double pct_h = double(h_plus[pos] + h_minus[pos+1]) / double(unstranded_cov);
+		  double pct_m = double(m_plus[pos] + m_minus[pos+1]) / double(unstranded_cov);
+		  out << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\t" << c.sampleName[file_c] << "\th\t*\t" << (h_plus[pos] + h_minus[pos+1]) << "\t" << (unmod_plus[pos] + unmod_minus[pos+1]) << "\t" << (m_plus[pos] + m_minus[pos+1]) << "\t" << unstranded_cov << "\t" << (uncertain_plus[pos] + uncertain_minus[pos+1]) << "\t" << (boost::format("%1$.4f") % pct_h) << std::endl;
+		  out << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\t" << c.sampleName[file_c] << "\tm\t*\t" << (m_plus[pos] + m_minus[pos+1]) << "\t" << (unmod_plus[pos] + unmod_minus[pos+1]) << "\t" << (h_plus[pos] + h_minus[pos+1]) << "\t" << unstranded_cov << "\t" << (uncertain_plus[pos] + uncertain_minus[pos+1]) << "\t" << (boost::format("%1$.4f") % pct_m) << std::endl;
+		}
 	      }
 	    } else {
-	      double pct_h_minus = ((cov_minus[pos] > 0) ? double(h_minus[pos]) / double(cov_minus[pos]) : 0.0);
-	      double pct_h_plus = ((cov_plus[pos] > 0) ? double(h_plus[pos]) / double(cov_plus[pos]) : 0.0);
-	      double pct_m_minus = ((cov_minus[pos] > 0) ? double(m_minus[pos]) / double(cov_minus[pos]) : 0.0);
-	      double pct_m_plus = ((cov_plus[pos] > 0) ? double(m_plus[pos]) / double(cov_plus[pos]) : 0.0);
-
 	      // Plus strand
 	      if (fwdCpG) {
-		if (h_plus[pos]) out << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\t" << c.sampleName[file_c] << "\th\t+\t" << h_plus[pos] << "\t" << cov_plus[pos] << "\t" << (boost::format("%1$.4f") % pct_h_plus) << std::endl;
-		if (m_plus[pos]) out << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\t" << c.sampleName[file_c] << "\tm\t+\t" << m_plus[pos] << "\t" << cov_plus[pos] << "\t" << (boost::format("%1$.4f") % pct_m_plus) << std::endl;
+		uint32_t cov_plus = m_plus[pos] + h_plus[pos] + unmod_plus[pos];
+		if (cov_plus > 0) {
+		  double pct_h_plus = double(h_plus[pos]) / double(cov_plus);
+		  double pct_m_plus = double(m_plus[pos]) / double(cov_plus);
+		  out << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\t" << c.sampleName[file_c] << "\th\t+\t" << h_plus[pos] << "\t" << unmod_plus[pos] << "\t" << m_plus[pos] << "\t" << cov_plus << "\t" << uncertain_plus[pos] << "\t" << (boost::format("%1$.4f") % pct_h_plus) << std::endl;
+		  out << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\t" << c.sampleName[file_c] << "\tm\t+\t" << m_plus[pos] << "\t" << unmod_plus[pos] << "\t" << h_plus[pos] << "\t" << cov_plus << "\t" << uncertain_plus[pos] << "\t" << (boost::format("%1$.4f") % pct_m_plus) << std::endl;
+		}
 	      }
 	      // Minus strand
 	      if (revCpG) {
-		if (h_minus[pos]) out << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\t" << c.sampleName[file_c] << "\th\t-\t" << h_minus[pos] << "\t" << cov_minus[pos] << "\t" << (boost::format("%1$.4f") % pct_h_minus) << std::endl;
-		if (m_minus[pos]) out << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\t" << c.sampleName[file_c] << "\tm\t-\t" << m_minus[pos] << "\t" << cov_minus[pos] << "\t" << (boost::format("%1$.4f") % pct_m_minus) << std::endl;
+		uint32_t cov_minus = m_minus[pos] + h_minus[pos] + unmod_minus[pos];
+		if (cov_minus > 0) {
+		  double pct_h_minus = double(h_minus[pos]) / double(cov_minus);
+		  double pct_m_minus = double(m_minus[pos]) / double(cov_minus);
+		  out << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\t" << c.sampleName[file_c] << "\th\t-\t" << h_minus[pos] << "\t" << unmod_minus[pos] << "\t" << m_minus[pos] << "\t" << cov_minus << "\t" << uncertain_minus[pos] << "\t" << (boost::format("%1$.4f") % pct_h_minus) << std::endl;
+		  out << hdr->target_name[refIndex] << "\t" << pos << "\t" << (pos + 1) << "\t" << c.sampleName[file_c] << "\tm\t-\t" << m_minus[pos] << "\t" << unmod_minus[pos] << "\t" << h_minus[pos] << "\t" << cov_minus << "\t" << uncertain_minus[pos] << "\t" << (boost::format("%1$.4f") % pct_m_minus) << std::endl;
+		}
 	      }
 	    }
 	  }

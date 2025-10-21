@@ -36,6 +36,7 @@ namespace cameo {
     uint16_t minMapQual;
     int32_t nchr;
     float minMod;
+    float maxUnmod;
     boost::filesystem::path bedfile;
     boost::filesystem::path outfile;
     std::vector<boost::filesystem::path> files;
@@ -81,7 +82,8 @@ namespace cameo {
     
     boost::program_options::options_description methyl("Methylation options");
     methyl.add_options()
-      ("minmod,m", boost::program_options::value<float>(&c.minMod)->default_value(0.8), "min. modification threshold")
+      ("minmod,m", boost::program_options::value<float>(&c.minMod)->default_value(0.7), "min. mod probability threshold")
+      ("maxunmod,u", boost::program_options::value<float>(&c.maxUnmod)->default_value(0.1), "max. mod probability threshold for unmodified")
       ("bedfile,b", boost::program_options::value<boost::filesystem::path>(&c.bedfile), "report mods over input BED")
       ("cpg,p", "only CpG counts")
       ("combine,c", "combine strands")

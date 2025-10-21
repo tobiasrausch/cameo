@@ -27,7 +27,6 @@
 
 namespace cameo {
 
-
   struct CameoConfig {
     bool onlyCpG;
     bool combineStrands;
@@ -35,8 +34,11 @@ namespace cameo {
     uint16_t minBaseQual;
     uint16_t minMapQual;
     int32_t nchr;
+    uint32_t dmrwin;
+    uint32_t dmrmedwin;
     float minMod;
     float maxUnmod;
+    float dmrmethylth;
     boost::filesystem::path bedfile;
     boost::filesystem::path outfile;
     std::vector<boost::filesystem::path> files;
@@ -75,7 +77,7 @@ namespace cameo {
     generic.add_options()
       ("help,?", "show help message")
       ("genome,g", boost::program_options::value<boost::filesystem::path>(&c.genome), "genome fasta file")
-      ("base-qual,a", boost::program_options::value<uint16_t>(&c.minBaseQual)->default_value(1), "min. base quality")
+      ("base-qual,s", boost::program_options::value<uint16_t>(&c.minBaseQual)->default_value(1), "min. base quality")
       ("map-qual,q", boost::program_options::value<uint16_t>(&c.minMapQual)->default_value(1), "min. mapping quality")
       ("outfile,o", boost::program_options::value<boost::filesystem::path>(&c.outfile), "output pileup table")
      ;
@@ -85,8 +87,16 @@ namespace cameo {
       ("minmod,m", boost::program_options::value<float>(&c.minMod)->default_value(0.7), "min. mod probability threshold")
       ("maxunmod,u", boost::program_options::value<float>(&c.maxUnmod)->default_value(0.2), "max. mod probability threshold for unmodified")
       ("bedfile,b", boost::program_options::value<boost::filesystem::path>(&c.bedfile), "report mods over input BED")
+      ("dmr,d", "identify demethylated regions")
       ("cpg,p", "only CpG counts")
       ("combine,c", "combine strands")
+      ;
+
+    boost::program_options::options_description dmr("Demethylated regions (DMRs, requires -d)");
+    dmr.add_options()
+      ("movavg,a", boost::program_options::value<uint32_t>(&c.dmrwin)->default_value(51), "rolling average window")
+      ("medsize,e", boost::program_options::value<uint32_t>(&c.dmrmedwin)->default_value(501), "rolling median window")
+      ("thres,t", boost::program_options::value<float>(&c.dmrmethylth)->default_value(0.35), "max. methylation fraction")
       ;
     
     boost::program_options::options_description hidden("Hidden options");
@@ -98,9 +108,9 @@ namespace cameo {
     pos_args.add("input-file", -1);
     
     boost::program_options::options_description cmdline_options;
-    cmdline_options.add(generic).add(methyl).add(hidden);
+    cmdline_options.add(generic).add(methyl).add(dmr).add(hidden);
     boost::program_options::options_description visible_options;
-    visible_options.add(generic).add(methyl);
+    visible_options.add(generic).add(methyl).add(dmr);
     boost::program_options::variables_map vm;
     boost::program_options::store(boost::program_options::command_line_parser(argc, argv).options(cmdline_options).positional(pos_args).run(), vm);
     boost::program_options::notify(vm);

@@ -5,7 +5,7 @@ namespace cameo
 {
 
 
-  std::string cameoVersionNumber = "0.0.3";
+  std::string cameoVersionNumber = "0.0.6";
 
   inline 
     void printTitle(std::string const& title) 

@@ -164,7 +164,7 @@ namespace cameo
 	  std::cerr << "Error: Couldn't parse BED intervals. Do the chromosome names match?" << std::endl;
 	  return 1;
 	} else {
-	  std::cout << '[' << boost::posix_time::to_simple_string(boost::posix_time::second_clock::local_time()) << "] Parsed " << nreg << " input regions." << std::endl;
+	  std::cerr << '[' << boost::posix_time::to_simple_string(boost::posix_time::second_clock::local_time()) << "] Parsed " << nreg << " input regions." << std::endl;
 	}
       }
     }

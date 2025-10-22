@@ -132,7 +132,7 @@ namespace cameo
       buf = of.rdbuf();
     } else buf = std::cout.rdbuf();
     std::ostream out(buf);
-    out << "chr\tstart\tend\tsample\tmodbase\tstrand\tmodcount\tunmod\tothermod\tcoverage\tfail\tfracmod" << std::endl;
+    out << "chr\tstart\tend\tname\tmodbase\tstrand\tmodcount\tunmod\tothermod\tcoverage\tfail\tfracmod" << std::endl;
 
     // Load FASTA
     char* seq = NULL;
@@ -451,6 +451,7 @@ namespace cameo
       
       // Output percent modified per site
       if (c.hasBedFile) {
+	// BED file
 	for(uint32_t i = 0; i < scanRegions[refIndex].size(); ++i) {
 	  if ((scanRegions[refIndex][i].start >= 0) && (scanRegions[refIndex][i].end <= hdr->target_len[refIndex])) {
 	    // Aggregate mod counts
@@ -496,28 +497,34 @@ namespace cameo
 	    // Unstranded
 	    if (c.combineStrands) {
 	      uint32_t unstranded_cov = reg_m_plus + reg_h_plus + reg_unmod_plus + reg_m_minus + reg_h_minus + reg_unmod_minus;
+	      double pct_h = 0;
+	      double pct_m = 0;
 	      if (unstranded_cov > 0) {
-		double pct_h = double(reg_h_plus + reg_h_minus) / double(unstranded_cov);
-		double pct_m = double(reg_m_plus + reg_m_minus) / double(unstranded_cov);
-		out << hdr->target_name[refIndex] << "\t" << scanRegions[refIndex][i].start << "\t" << scanRegions[refIndex][i].end << "\t" << scanRegions[refIndex][i].id << "\th\t*\t" << (reg_h_plus + reg_h_minus) << "\t" << (reg_unmod_plus + reg_unmod_minus) << "\t" << (reg_m_plus + reg_m_minus) << "\t" << unstranded_cov << "\t" << (reg_uncertain_plus + reg_uncertain_minus) << "\t" << (boost::format("%1$.4f") % pct_h) << std::endl;
-		out << hdr->target_name[refIndex] << "\t" << scanRegions[refIndex][i].start << "\t" << scanRegions[refIndex][i].end << "\t" << scanRegions[refIndex][i].id << "\tm\t*\t" << (reg_m_plus + reg_m_minus) << "\t" << (reg_unmod_plus + reg_unmod_minus) << "\t" << (reg_h_plus + reg_h_minus) << "\t" << unstranded_cov << "\t" << (reg_uncertain_plus + reg_uncertain_minus) << "\t" << (boost::format("%1$.4f") % pct_m) << std::endl;
+		pct_h = double(reg_h_plus + reg_h_minus) / double(unstranded_cov);
+		pct_m = double(reg_m_plus + reg_m_minus) / double(unstranded_cov);
 	      }
+	      out << hdr->target_name[refIndex] << "\t" << scanRegions[refIndex][i].start << "\t" << scanRegions[refIndex][i].end << "\t" << scanRegions[refIndex][i].id << "\th\t*\t" << (reg_h_plus + reg_h_minus) << "\t" << (reg_unmod_plus + reg_unmod_minus) << "\t" << (reg_m_plus + reg_m_minus) << "\t" << unstranded_cov << "\t" << (reg_uncertain_plus + reg_uncertain_minus) << "\t" << (boost::format("%1$.4f") % pct_h) << std::endl;
+	      out << hdr->target_name[refIndex] << "\t" << scanRegions[refIndex][i].start << "\t" << scanRegions[refIndex][i].end << "\t" << scanRegions[refIndex][i].id << "\tm\t*\t" << (reg_m_plus + reg_m_minus) << "\t" << (reg_unmod_plus + reg_unmod_minus) << "\t" << (reg_h_plus + reg_h_minus) << "\t" << unstranded_cov << "\t" << (reg_uncertain_plus + reg_uncertain_minus) << "\t" << (boost::format("%1$.4f") % pct_m) << std::endl;
 	    } else {
-		// Plus strand
+	      // Plus strand
 	      uint32_t reg_cov_plus = reg_m_plus + reg_h_plus + reg_unmod_plus;
+	      double pct_h_plus = 0;
+	      double pct_m_plus = 0;
 	      if (reg_cov_plus) {
-		double pct_h_plus = double(reg_h_plus) / double(reg_cov_plus);
-		double pct_m_plus = double(reg_m_plus) / double(reg_cov_plus);
-		out << hdr->target_name[refIndex] << "\t" << scanRegions[refIndex][i].start << "\t" << scanRegions[refIndex][i].end << "\t" << scanRegions[refIndex][i].id << "\th\t+\t" << reg_h_plus << "\t" << reg_unmod_plus << "\t" << reg_m_plus << "\t" << reg_cov_plus << "\t" << reg_uncertain_plus << "\t" << (boost::format("%1$.4f") % pct_h_plus) << std::endl;
-		out << hdr->target_name[refIndex] << "\t" << scanRegions[refIndex][i].start << "\t" << scanRegions[refIndex][i].end << "\t" << scanRegions[refIndex][i].id << "\tm\t+\t" << reg_m_plus << "\t" << reg_unmod_plus << "\t" << reg_h_plus << "\t" << reg_cov_plus << "\t" << reg_uncertain_plus << "\t" << (boost::format("%1$.4f") % pct_m_plus) << std::endl;
+		pct_h_plus = double(reg_h_plus) / double(reg_cov_plus);
+		pct_m_plus = double(reg_m_plus) / double(reg_cov_plus);
 	      }
+	      out << hdr->target_name[refIndex] << "\t" << scanRegions[refIndex][i].start << "\t" << scanRegions[refIndex][i].end << "\t" << scanRegions[refIndex][i].id << "\th\t+\t" << reg_h_plus << "\t" << reg_unmod_plus << "\t" << reg_m_plus << "\t" << reg_cov_plus << "\t" << reg_uncertain_plus << "\t" << (boost::format("%1$.4f") % pct_h_plus) << std::endl;
+	      out << hdr->target_name[refIndex] << "\t" << scanRegions[refIndex][i].start << "\t" << scanRegions[refIndex][i].end << "\t" << scanRegions[refIndex][i].id << "\tm\t+\t" << reg_m_plus << "\t" << reg_unmod_plus << "\t" << reg_h_plus << "\t" << reg_cov_plus << "\t" << reg_uncertain_plus << "\t" << (boost::format("%1$.4f") % pct_m_plus) << std::endl;
 	      uint32_t reg_cov_minus = reg_m_minus + reg_h_minus + reg_unmod_minus;
+	      double pct_h_minus = 0;
+	      double pct_m_minus = 0;
 	      if (reg_cov_minus) {
-		double pct_h_minus = double(reg_h_minus) / double(reg_cov_minus);
-		double pct_m_minus = double(reg_m_minus) / double(reg_cov_minus);
-		out << hdr->target_name[refIndex] << "\t" << scanRegions[refIndex][i].start << "\t" << scanRegions[refIndex][i].end << "\t" << scanRegions[refIndex][i].id << "\th\t-\t" << reg_h_minus << "\t" << reg_unmod_minus << "\t" << reg_m_minus << "\t" << reg_cov_minus << "\t" << reg_uncertain_minus << "\t" << (boost::format("%1$.4f") % pct_h_minus) << std::endl;
-		out << hdr->target_name[refIndex] << "\t" << scanRegions[refIndex][i].start << "\t" << scanRegions[refIndex][i].end << "\t" << scanRegions[refIndex][i].id << "\tm\t-\t" << reg_m_minus << "\t" << reg_unmod_minus << "\t" << reg_h_minus << "\t" << reg_cov_minus << "\t" << reg_uncertain_minus << "\t" << (boost::format("%1$.4f") % pct_m_minus) << std::endl;
+		pct_h_minus = double(reg_h_minus) / double(reg_cov_minus);
+		pct_m_minus = double(reg_m_minus) / double(reg_cov_minus);
 	      }
+	      out << hdr->target_name[refIndex] << "\t" << scanRegions[refIndex][i].start << "\t" << scanRegions[refIndex][i].end << "\t" << scanRegions[refIndex][i].id << "\th\t-\t" << reg_h_minus << "\t" << reg_unmod_minus << "\t" << reg_m_minus << "\t" << reg_cov_minus << "\t" << reg_uncertain_minus << "\t" << (boost::format("%1$.4f") % pct_h_minus) << std::endl;
+	      out << hdr->target_name[refIndex] << "\t" << scanRegions[refIndex][i].start << "\t" << scanRegions[refIndex][i].end << "\t" << scanRegions[refIndex][i].id << "\tm\t-\t" << reg_m_minus << "\t" << reg_unmod_minus << "\t" << reg_h_minus << "\t" << reg_cov_minus << "\t" << reg_uncertain_minus << "\t" << (boost::format("%1$.4f") % pct_m_minus) << std::endl;
 	    }
 	  }
 	}

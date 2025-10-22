@@ -1,5 +1,9 @@
 # Cameo: Cancer Analysis of Methylation
 
+## Installing breaktracer
+
+Cameo is available as a [statically linked binary](https://github.com/tobiasrausch/cameo/releases/), as a minimal [docker container](https://hub.docker.com/r/trausch/cameo/) or as a [singularity containter (SIF file)](https://github.com/tobiasrausch/cameo/releases/).
+
 ## Building from source
 
 Cameo can be built from source using a recursive clone and make. Cameo depends on [HTSlib](https://github.com/samtools/htslib) and [Boost](https://www.boost.org/).

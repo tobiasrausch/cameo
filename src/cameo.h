@@ -76,7 +76,6 @@ namespace cameo {
     CameoConfig c;
    
     // Parameter
-    std::string instag;
     boost::program_options::options_description generic("Generic options");
     generic.add_options()
       ("help,?", "show help message")

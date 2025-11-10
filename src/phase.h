@@ -49,11 +49,11 @@ namespace cameo {
     uint32_t minOverlapVar;
     uint32_t maxReadsPerChunk;
     uint32_t maxIter;
+    uint32_t minReadsPerBlock;
     int32_t nchr;
     int32_t minCov;
     int32_t chunkSize;
     int32_t chunkOverlap;
-    int32_t minReadsPerBlock;
     boost::filesystem::path outfile;
     boost::filesystem::path taggedfile;
     boost::filesystem::path vcffile;
@@ -92,6 +92,13 @@ namespace cameo {
     }    
   };
 
+  struct DPPath {
+    double score;
+    int hp; // 0 for H1, 1 for H2
+
+    DPPath() : score(0.0), hp(0) {}
+  };
+
   inline double
   _phredToErr(int q, int cap=60) {
     if (q < 0) q = 0;
@@ -99,93 +106,6 @@ namespace cameo {
     return std::pow(10.0, -q / 10.0);
   }
   
-  inline double
-  _logScore(bool obsSame, double ei, double ej) {
-    ei = std::min(std::max(ei, 1e-6), 0.499999);
-    ej = std::min(std::max(ej, 1e-6), 0.499999);
-    const double P_same = (1.0 - ei) * (1.0 - ej) + ei * ej;
-    const double P_diff = ei * (1.0 - ej) + (1.0 - ei) * ej;
-    double base = std::log(P_same / P_diff);
-    return obsSame ? base : -base;
-  }
-
-  template<typename TConfig>
-  inline void
-  accumulateLLREdges(TConfig const& c, std::vector<Variant> const& chunk_vars, std::unordered_map<std::size_t, ReadInfo> const& reads_map, int s, int e, std::vector<std::unordered_map<int,double>>& adj) {
-    int block_size = e - s + 1;
-    if (block_size <= 1) return;
-
-    for (auto const& kv : reads_map) {
-      ReadInfo const& ri = kv.second;
-      std::vector<int> idxs; idxs.reserve(block_size);
-      std::vector<int> alts; alts.reserve(block_size);
-      std::vector<int> bqs;  bqs.reserve(block_size);
-      
-      for (int local = 0; local < block_size; ++local) {
-	int gidx = s + local;
-	if (ri.mask.size() > (size_t)gidx && ri.mask[gidx]) {
-	  idxs.push_back(local);
-	  alts.push_back(ri.alt[gidx] ? 1 : 0);
-	  int bq = 0;
-	  if (ri.bq.size() > (size_t)gidx) bq = ri.bq[gidx];
-	  bqs.push_back(bq);
-	}
-      }
-      int k = (int)idxs.size();
-      if (k < 2) continue;
-
-      double pm = _phredToErr(ri.mapq > 255 ? 60 : ri.mapq);
-      double mscale = std::max(0.0, 1.0 - pm);
-
-      for (int a = 0; a < k; ++a) {
-	int i = idxs[a];
-	int ai = alts[a];
-	double ei = _phredToErr(bqs[a]);
-	for (int b = a + 1; b < k; ++b) {
-	  int j = idxs[b];
-	  int aj = alts[b];
-	  double ej = _phredToErr(bqs[b]);
-	  
-	  bool obsSame = (ai == aj);
-	  double llr = _logScore(obsSame, ei, ej);
-	  
-	  // Distance decay
-	  int gi = s + i, gj = s + j;
-	  int dist = std::abs(chunk_vars[gj].pos - chunk_vars[gi].pos);
-	  double decay = std::exp(-(double)dist / 100000.0);
-	  
-	  double contrib = llr * mscale * decay;
-	  if (std::fabs(contrib) < 0.05) continue;
-	  
-	  adj[i][j] += contrib;
-	  adj[j][i] += contrib;
-	}
-      }
-    }
-  }
-  
-  inline void localSwitchRepair(std::vector<std::unordered_map<int,double>> const& adj, std::vector<int>& out_hap, int s, int e, double minEdgeAbs) {
-    if (e - s + 1 <= 2) return;
-    for (int gi = s + 1; gi <= e; ++gi) {
-      int li_prev = gi - 1 - s;
-      int li = gi - s;
-      double w = 0.0;
-      auto it = adj[li_prev].find(li);
-      if (it != adj[li_prev].end()) w = it->second;
-      if (std::fabs(w) < minEdgeAbs) continue;
-      int hi_prev = out_hap[gi - 1], hi = out_hap[gi];
-      if (hi_prev < 0 || hi < 0) continue;
-      
-      bool expectSame = (w > 0.0);
-      bool isSame = (hi_prev == hi);
-      if (expectSame != isSame) {
-	for (int t = gi; t <= e; ++t) {
-	  if (out_hap[t] >= 0) out_hap[t] = (out_hap[t] == 1) ? 0 : 1;
-	}
-      }
-    }
-  }
-
   inline int
   _bestAllele(std::string const& readSeq, int read_offset, std::string const& REF, std::string const& ALT) {
     int buffer = 25;
@@ -437,138 +357,193 @@ namespace cameo {
   solveChunk(TConfig const& c, std::vector<Variant> const& chunk_vars, std::unordered_map<std::size_t, ReadInfo> const& reads_map, std::vector<int>& out_hap, std::vector<int>& phase_block_id) {
     if (chunk_vars.empty()) return;
     int B = (int)chunk_vars.size();
-    out_hap.assign(B, 0);
+    out_hap.assign(B, -1);
     phase_block_id.assign(B, 0);
-    
-    int R = (int)reads_map.size();
-    if (R < c.minReadsPerBlock) return;
-    
-    // Masks/alt for each read
-    std::vector<boost::dynamic_bitset<>> read_mask;
-    std::vector<boost::dynamic_bitset<>> read_alt;
-    read_mask.reserve(R);
-    read_alt.reserve(R);
-    for (auto const &kv : reads_map) {
-      read_mask.push_back(kv.second.mask);
-      read_alt.push_back(kv.second.alt);
-    }
-    
-    // Span counts to split into blocks
-    std::vector<int> spanCount(std::max(0, B - 1), 0);
+
+    // Map reads to integer
+    std::vector<std::size_t> read_hashes;
+    for (auto const& kv : reads_map) read_hashes.push_back(kv.first);
+    int R = read_hashes.size();
+    if ((R < (int) c.minReadsPerBlock) || (B <= 1)) return;
+
+    // Split variants into blocks
+    std::vector<int> spanCount(B - 1, 0);
     for (int r = 0; r < R; ++r) {
+      ReadInfo const& ri = reads_map.at(read_hashes[r]);
       int last = -1;
       for (int i = 0; i < B; ++i) {
-	if (read_mask[r][i]) {
-	  if (last >= 0) ++spanCount[last];
-	  last = i;
-	}
+        if (ri.mask[i]) {
+          if (last != -1) {
+            for (int j = last; j < i; ++j) ++spanCount[j];
+          }
+          last = i;
+        }
       }
     }
-    
-    std::vector<std::pair<int,int>> blocks;
+    std::vector<std::pair<int, int>> blocks;
     int block_start = 0;
     for (int i = 0; i < B - 1; ++i) {
-      if (spanCount[i] < c.minReadsPerBlock) {
-	blocks.emplace_back(block_start, i);
-	block_start = i + 1;
+      if (spanCount[i] < (int) c.minReadsPerBlock) {
+        blocks.push_back(std::make_pair(block_start, i));
+        block_start = i + 1;
       }
     }
-    blocks.emplace_back(block_start, B - 1);
-    
-    int global_ps_id = 1;
-    for (auto const &blk : blocks) {
+    blocks.push_back(std::make_pair(block_start, B - 1));
+
+    // Process blocks
+    int current_ps_id = 1;
+    for (auto const& blk : blocks) {
       int s = blk.first;
       int e = blk.second;
       int block_size = e - s + 1;
-      if (block_size <= 0) continue;
-      
-      if (block_size == 1) {
-	out_hap[s] = 0;
-	phase_block_id[s] = global_ps_id++;
-	continue;
+      if (block_size < 2) continue;
+
+      // Collect reads
+      std::vector<int> block_read_indices;
+      for (int r = 0; r < R; ++r) {
+        ReadInfo const& ri = reads_map.at(read_hashes[r]);
+        for (int i = s; i <= e; ++i) {
+          if (ri.mask[i]) {
+            block_read_indices.push_back(r);
+            break;
+          }
+        }
+      }
+      if (block_read_indices.size() < c.minReadsPerBlock) continue;
+
+      // Init HP1 (partition 0) and HP2 (partition 1)
+      std::vector<int> partition(block_read_indices.size(), -1);
+      partition[0] = 0;
+      for (uint32_t i = 1; i < block_read_indices.size(); ++i) {
+        ReadInfo const& ri = reads_map.at(read_hashes[block_read_indices[i]]);
+        double score0 = 0;
+	double score1 = 0;
+        for (uint32_t j = 0; j < i; ++j) {
+	  if (partition[j] == -1) continue;
+	  ReadInfo const& rj = reads_map.at(read_hashes[block_read_indices[j]]);
+	  double agree = 0;
+	  double disagree = 0;
+	  for (int k = s; k <= e; ++k) {
+	    if (ri.mask[k] && rj.mask[k]) {
+	      if (ri.alt[k] == rj.alt[k]) ++agree;
+	      else ++disagree;
+	    }
+	  }
+	  if (agree + disagree > 0) {
+	    if (partition[j] == 0) score0 += disagree / (agree + disagree);
+	    else score1 += disagree / (agree + disagree);
+	  }
+        }
+        partition[i] = (score0 <= score1) ? 0 : 1;
+      }
+
+      // Iterative refinement
+      std::vector<int> best_partition(block_read_indices.size(), 0);
+      double min_mec_score = std::numeric_limits<double>::max();
+      for (int iter = 0; iter < (int)c.maxIter; ++iter) {
+        // Compute consensus
+        std::vector<int> h1(block_size, -1);
+	std::vector<int> h2(block_size, -1);
+        for (uint32_t i = 0; i < (uint32_t) block_size; ++i) {
+	  // H1
+          int ref_c = 0;
+	  int alt_c = 0;
+          for (uint32_t r_idx = 0; r_idx < block_read_indices.size(); ++r_idx) {
+            if (partition[r_idx] == 0) {
+              ReadInfo const& ri = reads_map.at(read_hashes[block_read_indices[r_idx]]);
+              if (ri.mask[s + i]) {
+                if (ri.alt[s + i]) ++alt_c;
+		else ++ref_c;
+              }
+            }
+          }
+          if (ref_c + alt_c > 0) h1[i] = (alt_c > ref_c) ? 1 : 0;
+	  // H2
+          ref_c = 0;
+	  alt_c = 0;
+          for (uint32_t r_idx = 0; r_idx < block_read_indices.size(); ++r_idx) {
+            if (partition[r_idx] == 1) {
+              ReadInfo const& ri = reads_map.at(read_hashes[block_read_indices[r_idx]]);
+              if (ri.mask[s + i]) {
+                if (ri.alt[s + i]) ++alt_c;
+		else ++ref_c;
+              }
+            }
+          }
+          if (ref_c + alt_c > 0) h2[i] = (alt_c > ref_c) ? 1 : 0;
+	}
+
+        // DP
+        std::vector<int> new_partition(block_read_indices.size());
+        double current_mec_score = 0;
+        bool changed = false;
+        for (uint32_t r_idx = 0; r_idx < block_read_indices.size(); ++r_idx) {
+          ReadInfo const& ri = reads_map.at(read_hashes[block_read_indices[r_idx]]);
+          std::vector<DPPath> dp(block_size, DPPath());
+          double switch_penalty = std::log(0.001);
+          for (int i = 0; i < block_size; ++i) {
+	    if (!ri.mask[s + i]) {
+	      if (i > 0) dp[i] = dp[i-1];
+	      continue;
+	    }
+	    int allele = ri.alt[s+i];
+	    double err_prob = _phredToErr(ri.bq[s+i]);
+	    double cost1 = ((h1[i] == -1) || (h1[i] == allele)) ? err_prob : (1.0 - err_prob);
+	    double cost2 = ((h2[i] == -1) || (h2[i] == allele)) ? err_prob : (1.0 - err_prob);
+	    if (i == 0) {
+	      dp[i].score = std::min(std::log(cost1), std::log(cost2));
+	      dp[i].hp = (std::log(cost1) < std::log(cost2)) ? 0 : 1;
+	    } else {
+	      double s1 = dp[i-1].score + std::log(cost1) + ((dp[i-1].hp == 0) ? 0 : switch_penalty);
+	      double s2 = dp[i-1].score + std::log(cost2) + ((dp[i-1].hp == 1) ? 0 : switch_penalty);
+	      dp[i].score = std::min(s1,s2);
+	      dp[i].hp = (s1 < s2) ? 0 : 1;
+	    }
+          }
+          new_partition[r_idx] = dp[block_size-1].hp;
+          current_mec_score -= dp[block_size - 1].score;
+          if (new_partition[r_idx] != partition[r_idx]) changed = true;
+	}
+        partition = new_partition;
+        if (current_mec_score < min_mec_score) {
+          min_mec_score = current_mec_score;
+          best_partition = partition;
+        }
+        if (!changed) break;
       }
       
-      // Build adjacency
-      std::vector<std::unordered_map<int,double>> adj(block_size);
-      accumulateLLREdges(c, chunk_vars, reads_map, s, e, adj);
-      
-      // Initialize haplotype signs by per-site majority
-      std::vector<int> hap_sign(block_size, 1);
-      for (int local = 0; local < block_size; ++local) {
-	int cov = 0, altc = 0;
-	int gidx = s + local;
-	for (int r = 0; r < R; ++r) {
-	  if (read_mask[r][gidx]) {
-	    ++cov;
-	    if (read_alt[r][gidx]) ++altc;
+      // Build haplotypes
+      std::vector<int> final_h1(block_size, -1);
+      std::vector<int> final_h2(block_size, -1);
+      for (int i = 0; i < block_size; ++i) {
+	double h1_ref = 0;
+	double h1_alt = 0;
+	double h2_ref = 0;
+	double h2_alt = 0;
+	for(uint32_t r_idx = 0; r_idx < block_read_indices.size(); ++r_idx) {
+	  ReadInfo const& ri = reads_map.at(read_hashes[block_read_indices[r_idx]]);
+	  if (ri.mask[s+i]) {
+	    double p_corr = 1.0 - _phredToErr(ri.bq[s+i]);
+	    if (best_partition[r_idx] == 0) { // H1
+	      if (ri.alt[s+i]) h1_alt += p_corr;
+	      else h1_ref += p_corr;
+	    } else { // H2
+	      if (ri.alt[s+i]) h2_alt += p_corr;
+	      else h2_ref += p_corr;
+	    }
 	  }
 	}
-	hap_sign[local] = ((cov > 0) && (altc * 2 >= cov)) ? 1 : -1;
+	if (h1_ref + h1_alt > 0) final_h1[i] = (h1_alt > h1_ref) ? 1 : 0;
+	if (h2_ref + h2_alt > 0) final_h2[i] = (h2_alt > h2_ref) ? 1 : 0;
       }
-      
-      // Iterate
-      const int MAX_ITERS = std::max(5, (int)c.maxIter);
-      bool converged = false;
-      for (int iter = 0; iter < MAX_ITERS && !converged; ++iter) {
-	converged = true;
-	std::vector<int> new_sign(block_size, 1);
-	for (int i = 0; i < block_size; ++i) {
-	  double score = 0.0;
-	  for (auto const &kv : adj[i]) score += kv.second * hap_sign[kv.first];
-	  int ns = (score > 0.0) ? 1 : ((score < 0.0) ? -1 : hap_sign[i]);
-	  if (ns != hap_sign[i]) converged = false;
-	  new_sign[i] = ns;
-	}
-	hap_sign.swap(new_sign);
+      for (int i = 0; i < block_size; ++i) {
+	// Valid het. variant?
+        if ((final_h1[i] != -1) && (final_h2[i] != -1) && (final_h1[i] != final_h2[i])) {
+          out_hap[s + i] = final_h1[i];
+          phase_block_id[s + i] = current_ps_id;
+        }
       }
-      
-      // Read reassignment
-      std::vector<int> read_assign(R, -1);
-      for (int r = 0; r < R; ++r) {
-	double score = 0.0;
-	for (int local = 0; local < block_size; ++local) {
-	  int gidx = s + local;
-	  if (!read_mask[r][gidx]) continue;
-	  int readAllele = read_alt[r][gidx] ? 1 : 0;
-	  int hapAllele = (hap_sign[local] == 1) ? 1 : 0;
-	  score += (readAllele == hapAllele) ? 1.0 : -1.0;
-	}
-	read_assign[r] = (score >= 0.0) ? 0 : 1;
-      }
-      
-      // Weighted site decision and confidence
-      for (int local = 0; local < block_size; ++local) {
-	double vote = 0.0, weight_sum = 0.0;
-	int gidx = s + local;
-	for (int r = 0; r < R; ++r) {
-	  if (!read_mask[r][gidx]) continue;
-	  int readAllele = read_alt[r][gidx] ? 1 : 0;
-	  int hapAllele = (hap_sign[local] == 1) ? 1 : 0;
-	  int contribution = (readAllele == hapAllele) ? 1 : -1;
-	  if (read_assign[r] == 1) contribution = -contribution;
-	  double w = 1.0; 
-	  vote += w * contribution;
-	  weight_sum += w;
-	}
-	
-	double conf = (weight_sum > 0.0) ? std::abs(vote) / weight_sum : 0.0;
-	double linkage_strength = 0.0;
-	for (auto const& kv : adj[local]) linkage_strength += std::abs(kv.second);
-	linkage_strength /= std::max(1.0, (double)adj[local].size());
-	double combined_conf = 0.5 * conf + 0.5 * std::min(1.0, linkage_strength / 5.0);
-	
-	double thr = 0.45 + 0.15 * std::tanh((weight_sum - 8.0) / 6.0);
-	if (combined_conf < thr) out_hap[gidx] = -1;
-	else {
-	  out_hap[gidx] = (vote >= 0.0) ? ((hap_sign[local] == 1) ? 1 : 0) : ((hap_sign[local] == 1) ? 0 : 1);
-	}
-	phase_block_id[gidx] = global_ps_id;
-      }
-      
-      // Windowed post-hoc switch repair using adj(i,i+1)
-      //localSwitchRepair(adj, out_hap, s, e, 1.5);
-      
-      ++global_ps_id;
+      ++current_ps_id;
     }
   }
 
@@ -943,7 +918,7 @@ namespace cameo {
       ("chunkoverlap,l", boost::program_options::value<int32_t>(&c.chunkOverlap)->default_value(50000), "chunk overlap")
       ("minoverlap,p", boost::program_options::value<uint32_t>(&c.minOverlapVar)->default_value(3), "min. variants spanned by a read")
       ("maxiter,m", boost::program_options::value<uint32_t>(&c.maxIter)->default_value(50), "max. iterations per block")
-      ("minreadsperblock,n", boost::program_options::value<int32_t>(&c.minReadsPerBlock)->default_value(2), "min. reads per block")
+      ("minreadsperblock,n", boost::program_options::value<uint32_t>(&c.minReadsPerBlock)->default_value(2), "min. reads per block")
       ("maxreadsperchunk,r", boost::program_options::value<uint32_t>(&c.maxReadsPerChunk)->default_value(10000), "max. reads per chunk")
       ;
 

@@ -37,6 +37,8 @@
 #include <unordered_set>
 #include <vector>
 
+#include "edlib.h"
+
 namespace cameo {
   
   struct PhaseConfig {
@@ -89,6 +91,123 @@ namespace cameo {
       bq.resize(numVars, 0);
     }    
   };
+
+  inline double
+  _phredToErr(int q, int cap=60) {
+    if (q < 0) q = 0;
+    if (q > cap) q = cap;
+    return std::pow(10.0, -q / 10.0);
+  }
+  
+  inline double
+  _logScore(bool obsSame, double ei, double ej) {
+    ei = std::min(std::max(ei, 1e-6), 0.499999);
+    ej = std::min(std::max(ej, 1e-6), 0.499999);
+    const double P_same = (1.0 - ei) * (1.0 - ej) + ei * ej;
+    const double P_diff = ei * (1.0 - ej) + (1.0 - ei) * ej;
+    double base = std::log(P_same / P_diff);
+    return obsSame ? base : -base;
+  }
+
+  template<typename TConfig>
+  inline void
+  accumulateLLREdges(TConfig const& c, std::vector<Variant> const& chunk_vars, std::unordered_map<std::size_t, ReadInfo> const& reads_map, int s, int e, std::vector<std::unordered_map<int,double>>& adj) {
+    int block_size = e - s + 1;
+    if (block_size <= 1) return;
+
+    for (auto const& kv : reads_map) {
+      ReadInfo const& ri = kv.second;
+      std::vector<int> idxs; idxs.reserve(block_size);
+      std::vector<int> alts; alts.reserve(block_size);
+      std::vector<int> bqs;  bqs.reserve(block_size);
+      
+      for (int local = 0; local < block_size; ++local) {
+	int gidx = s + local;
+	if (ri.mask.size() > (size_t)gidx && ri.mask[gidx]) {
+	  idxs.push_back(local);
+	  alts.push_back(ri.alt[gidx] ? 1 : 0);
+	  int bq = 0;
+	  if (ri.bq.size() > (size_t)gidx) bq = ri.bq[gidx];
+	  bqs.push_back(bq);
+	}
+      }
+      int k = (int)idxs.size();
+      if (k < 2) continue;
+
+      double pm = _phredToErr(ri.mapq > 255 ? 60 : ri.mapq);
+      double mscale = std::max(0.0, 1.0 - pm);
+
+      for (int a = 0; a < k; ++a) {
+	int i = idxs[a];
+	int ai = alts[a];
+	double ei = _phredToErr(bqs[a]);
+	for (int b = a + 1; b < k; ++b) {
+	  int j = idxs[b];
+	  int aj = alts[b];
+	  double ej = _phredToErr(bqs[b]);
+	  
+	  bool obsSame = (ai == aj);
+	  double llr = _logScore(obsSame, ei, ej);
+	  
+	  // Distance decay
+	  int gi = s + i, gj = s + j;
+	  int dist = std::abs(chunk_vars[gj].pos - chunk_vars[gi].pos);
+	  double decay = std::exp(-(double)dist / 100000.0);
+	  
+	  double contrib = llr * mscale * decay;
+	  if (std::fabs(contrib) < 0.05) continue;
+	  
+	  adj[i][j] += contrib;
+	  adj[j][i] += contrib;
+	}
+      }
+    }
+  }
+  
+  inline void localSwitchRepair(std::vector<std::unordered_map<int,double>> const& adj, std::vector<int>& out_hap, int s, int e, double minEdgeAbs) {
+    if (e - s + 1 <= 2) return;
+    for (int gi = s + 1; gi <= e; ++gi) {
+      int li_prev = gi - 1 - s;
+      int li = gi - s;
+      double w = 0.0;
+      auto it = adj[li_prev].find(li);
+      if (it != adj[li_prev].end()) w = it->second;
+      if (std::fabs(w) < minEdgeAbs) continue;
+      int hi_prev = out_hap[gi - 1], hi = out_hap[gi];
+      if (hi_prev < 0 || hi < 0) continue;
+      
+      bool expectSame = (w > 0.0);
+      bool isSame = (hi_prev == hi);
+      if (expectSame != isSame) {
+	for (int t = gi; t <= e; ++t) {
+	  if (out_hap[t] >= 0) out_hap[t] = (out_hap[t] == 1) ? 0 : 1;
+	}
+      }
+    }
+  }
+
+  inline int
+  _bestAllele(std::string const& readSeq, int read_offset, std::string const& REF, std::string const& ALT) {
+    int buffer = 25;
+    int maxEdit = 2;
+    if ((read_offset < 0) || (read_offset >= (int)readSeq.size())) return -1;
+    int s = std::max(0, read_offset - buffer);
+    int e = std::min((int) readSeq.size(), (int) (read_offset + std::max(REF.size(), ALT.size()) + buffer));
+    if (s >= e) return -1;
+    std::string q = readSeq.substr(s, e - s);
+    EdlibAlignResult rRef = edlibAlign(REF.c_str(), (int)REF.size(), q.c_str(), (int)q.size(), edlibNewAlignConfig(maxEdit, EDLIB_MODE_HW, EDLIB_TASK_DISTANCE, NULL, 0));
+    EdlibAlignResult rAlt = edlibAlign(ALT.c_str(), (int)ALT.size(), q.c_str(), (int)q.size(), edlibNewAlignConfig(maxEdit, EDLIB_MODE_HW, EDLIB_TASK_DISTANCE, NULL, 0));
+    int dRef = rRef.editDistance;
+    int dAlt = rAlt.editDistance;
+    edlibFreeAlignResult(rRef);
+    edlibFreeAlignResult(rAlt);
+    
+    // Confident ALT or REF call?
+    if ((dRef < 0) && (dAlt < 0)) return -1;
+    if ((dRef >= 0) && (dRef <= maxEdit) && ((dAlt < 0) || (dRef < dAlt))) return 0;
+    if ((dAlt >= 0) && (dAlt <= maxEdit) && ((dRef < 0) || (dAlt < dRef))) return 1;
+    return -1;
+  }
 
   template<typename TConfig>
   inline void
@@ -203,7 +322,14 @@ namespace cameo {
       hts_idx_t* idx = sam_index_load(samfile, c.bamfile.string().c_str());
       bam_hdr_t* hdr = sam_hdr_read(samfile);
 
+      // Load reference sequence
+      faidx_t* fai = fai_load(c.genome.string().c_str());
+      std::string chrName(hdr->target_name[refIndex]);
+      int32_t seqlen = -1;
+      char* seq = NULL;
+      seq = faidx_fetch_seq(fai, chrName.c_str(), 0, hdr->target_len[refIndex], &seqlen);
 
+      // Parse BAM
       hts_itr_t* itr = sam_itr_queryi(idx, refIndex, chunk_genomic_start, chunk_genomic_end);
       bam1_t* rec = bam_init1();
       int numVars = chunk_vars.size();
@@ -244,16 +370,29 @@ namespace cameo {
 	      int qi = sp + i;
 	      if ((qi < 0) || (qi >= rec->core.l_qseq)) continue;
 	      if (quality[qi] < c.minBaseQual) continue;
-	      std::string REF = chunk_vars[local].ref;
-	      std::string ALT = chunk_vars[local].alt;
-	      if (sequence.substr(qi, REF.size()) == REF) {
-		ri.mask[local] = true;
-		ri.bq[local] = quality[qi];
-		ri.mapq = rec->core.qual;
+	      std::string const& REF = chunk_vars[local].ref;
+	      std::string const& ALT = chunk_vars[local].alt;
+	      int call = -1;
+	      if ((ALT.size() == 1) && (REF.size() == 1)) {
+		// SNP
+		if ((sequence[qi] == REF[0]) && (sequence[qi] != ALT[0])) call = 0;
+		else if ((sequence[qi] != REF[0]) && (sequence[qi] == ALT[0])) call = 1;
+	      } else {
+		if (REF.size() <= ALT.size()) {
+		  // Insertion or MNP
+		  int32_t diff = ALT.size() - REF.size();
+		  std::string REFEXT = REF + std::string(seq + gp + REF.size(), seq + gp + REF.size() + diff);
+		  call = _bestAllele(sequence, qi, REFEXT, ALT);
+		} else {
+		  // Deletion
+		  int32_t diff = REF.size() - ALT.size();
+		  std::string ALTEXT = ALT + std::string(seq + gp + REF.size(), seq + gp + REF.size() + diff);
+		  call = _bestAllele(sequence, qi, REF, ALTEXT);
+		}
 	      }
-	      else if (sequence.substr(qi, ALT.size()) == ALT) {
+	      if (call != -1) {
 		ri.mask[local] = true;
-		ri.alt[local] = true;
+		ri.alt[local] = call;
 		ri.bq[local] = quality[qi];
 		ri.mapq = rec->core.qual;
 	      }
@@ -269,12 +408,14 @@ namespace cameo {
 	  }
         }
       }
+      if (seq != NULL) free(seq);
+      fai_destroy(fai);
       bam_destroy1(rec);
       hts_itr_destroy(itr);
       hts_idx_destroy(idx);
       bam_hdr_destroy(hdr);
       sam_close(samfile);
-
+    
       // Remove reads that do not cover enough variants and downsample (if needed)
       std::vector<std::pair<uint32_t, std::size_t> > varCounts;
       for(typename TReadMap::iterator it = readTmp.begin(); it != readTmp.end(); ++it) varCounts.push_back(std::make_pair(it->second.mask.count(), it->first));
@@ -291,19 +432,18 @@ namespace cameo {
     }
   }
 
-
   template<typename TConfig>
   inline void
   solveChunk(TConfig const& c, std::vector<Variant> const& chunk_vars, std::unordered_map<std::size_t, ReadInfo> const& reads_map, std::vector<int>& out_hap, std::vector<int>& phase_block_id) {
     if (chunk_vars.empty()) return;
-    int B = chunk_vars.size();
+    int B = (int)chunk_vars.size();
     out_hap.assign(B, 0);
     phase_block_id.assign(B, 0);
-
-    int R = reads_map.size();
+    
+    int R = (int)reads_map.size();
     if (R < c.minReadsPerBlock) return;
-
-    // Collect read masks and alt bitsets
+    
+    // Masks/alt for each read
     std::vector<boost::dynamic_bitset<>> read_mask;
     std::vector<boost::dynamic_bitset<>> read_alt;
     read_mask.reserve(R);
@@ -312,8 +452,8 @@ namespace cameo {
       read_mask.push_back(kv.second.mask);
       read_alt.push_back(kv.second.alt);
     }
-
-    // Read span count between consecutive variants
+    
+    // Span counts to split into blocks
     std::vector<int> spanCount(std::max(0, B - 1), 0);
     for (int r = 0; r < R; ++r) {
       int last = -1;
@@ -324,19 +464,17 @@ namespace cameo {
 	}
       }
     }
-
-    // Split into phased blocks
+    
     std::vector<std::pair<int,int>> blocks;
     int block_start = 0;
     for (int i = 0; i < B - 1; ++i) {
       if (spanCount[i] < c.minReadsPerBlock) {
-	blocks.push_back(std::make_pair(block_start, i));
+	blocks.emplace_back(block_start, i);
 	block_start = i + 1;
       }
     }
-    blocks.push_back(std::make_pair(block_start, B - 1));
-
-    // Process blocks
+    blocks.emplace_back(block_start, B - 1);
+    
     int global_ps_id = 1;
     for (auto const &blk : blocks) {
       int s = blk.first;
@@ -344,76 +482,20 @@ namespace cameo {
       int block_size = e - s + 1;
       if (block_size <= 0) continue;
       
-      // If only one variant in this block
       if (block_size == 1) {
 	out_hap[s] = 0;
 	phase_block_id[s] = global_ps_id++;
 	continue;
       }
       
-      // Weighted adjacency between variant i and j
+      // Build adjacency
       std::vector<std::unordered_map<int,double>> adj(block_size);
-      for (int r = 0; r < R; ++r) {
-	std::vector<int> idxs;
-	std::vector<int> alts;
-	idxs.reserve(block_size);
-	alts.reserve(block_size);
-	for (int local = 0; local < block_size; ++local) {
-	  int gidx = s + local;
-	  if (read_mask[r][gidx]) {
-	    idxs.push_back(local);
-	    alts.push_back(read_alt[r][gidx] ? 1 : 0);
-	  }
-	}
-	int k = idxs.size();
-	if (k < 2) continue;
-	
-	// Calculate edge weight
-	double span = std::sqrt((double)k);
-	double w = std::min(4.0, std::max(0.5, span));
-	for (int i = 0; i < k; ++i) {
-	  int vi = idxs[i];
-	  int ai = alts[i];
-	  for (int j = i + 1; j < k; ++j) {
-	    int vj = idxs[j];
-	    int aj = alts[j];
-	    double delta = (ai == aj) ? w : -w;
-	    adj[vi][vj] += delta;
-	    adj[vj][vi] += delta;
-	  }
-	}
-      }
+      accumulateLLREdges(c, chunk_vars, reads_map, s, e, adj);
       
-      // No spanning reads?
-      bool hasEdges = false;
-      for (int i = 0; i < block_size; ++i) {
-	if (!adj[i].empty()) {
-	  hasEdges = true;
-	  break;
-	}
-      }
-      if (!hasEdges) {
-	for (int local = 0; local < block_size; ++local) {
-	  int cov = 0, altc = 0;
-	  int gidx = s + local;
-	  for (int r = 0; r < R; ++r) {
-	    if (read_mask[r][gidx]) {
-	      ++cov;
-	      if (read_alt[r][gidx]) ++altc;
-	    }
-	  }
-	  out_hap[gidx] = (cov > 0 && altc * 2 >= cov) ? 1 : 0;
-	  phase_block_id[gidx] = global_ps_id;
-	}
-	++global_ps_id;
-	continue;
-      }
-
-      // Initialize haplotype signs using per-site majority
+      // Initialize haplotype signs by per-site majority
       std::vector<int> hap_sign(block_size, 1);
       for (int local = 0; local < block_size; ++local) {
-	int cov = 0;
-	int altc = 0;
+	int cov = 0, altc = 0;
 	int gidx = s + local;
 	for (int r = 0; r < R; ++r) {
 	  if (read_mask[r][gidx]) {
@@ -424,7 +506,7 @@ namespace cameo {
 	hap_sign[local] = ((cov > 0) && (altc * 2 >= cov)) ? 1 : -1;
       }
       
-      // Iterative linkage propagation
+      // Iterate
       const int MAX_ITERS = std::max(5, (int)c.maxIter);
       bool converged = false;
       for (int iter = 0; iter < MAX_ITERS && !converged; ++iter) {
@@ -432,17 +514,15 @@ namespace cameo {
 	std::vector<int> new_sign(block_size, 1);
 	for (int i = 0; i < block_size; ++i) {
 	  double score = 0.0;
-	  for (auto const &kv : adj[i]) {
-	    score += kv.second * hap_sign[kv.first];
-	  }
+	  for (auto const &kv : adj[i]) score += kv.second * hap_sign[kv.first];
 	  int ns = (score > 0.0) ? 1 : ((score < 0.0) ? -1 : hap_sign[i]);
 	  if (ns != hap_sign[i]) converged = false;
 	  new_sign[i] = ns;
 	}
 	hap_sign.swap(new_sign);
       }
-
-      // Read reassignment to haplotypes
+      
+      // Read reassignment
       std::vector<int> read_assign(R, -1);
       for (int r = 0; r < R; ++r) {
 	double score = 0.0;
@@ -455,8 +535,8 @@ namespace cameo {
 	}
 	read_assign[r] = (score >= 0.0) ? 0 : 1;
       }
-
-      // Weighting
+      
+      // Weighted site decision and confidence
       for (int local = 0; local < block_size; ++local) {
 	double vote = 0.0, weight_sum = 0.0;
 	int gidx = s + local;
@@ -466,26 +546,28 @@ namespace cameo {
 	  int hapAllele = (hap_sign[local] == 1) ? 1 : 0;
 	  int contribution = (readAllele == hapAllele) ? 1 : -1;
 	  if (read_assign[r] == 1) contribution = -contribution;
-	  double w = 1.0; // MAPQ/BQ weights?
+	  double w = 1.0; 
 	  vote += w * contribution;
 	  weight_sum += w;
 	}
 	
-	// Compute phasing confidence
 	double conf = (weight_sum > 0.0) ? std::abs(vote) / weight_sum : 0.0;
 	double linkage_strength = 0.0;
 	for (auto const& kv : adj[local]) linkage_strength += std::abs(kv.second);
 	linkage_strength /= std::max(1.0, (double)adj[local].size());
 	double combined_conf = 0.5 * conf + 0.5 * std::min(1.0, linkage_strength / 5.0);
 	
-	// Output haplotype
 	double thr = 0.45 + 0.15 * std::tanh((weight_sum - 8.0) / 6.0);
-	if (combined_conf < thr) out_hap[gidx] = -1;  // unphased
+	if (combined_conf < thr) out_hap[gidx] = -1;
 	else {
 	  out_hap[gidx] = (vote >= 0.0) ? ((hap_sign[local] == 1) ? 1 : 0) : ((hap_sign[local] == 1) ? 0 : 1);
 	}
 	phase_block_id[gidx] = global_ps_id;
       }
+      
+      // Windowed post-hoc switch repair using adj(i,i+1)
+      //localSwitchRepair(adj, out_hap, s, e, 1.5);
+      
       ++global_ps_id;
     }
   }
@@ -732,7 +814,6 @@ namespace cameo {
     // Iterate chromosomes
     std::cerr << '[' << boost::posix_time::to_simple_string(boost::posix_time::second_clock::local_time()) << "] Phase variants" << std::endl;
     ThreadPool pool(c.maxThreads);
-    uint32_t lastChrPsVal = 0;
     for (int refIndex = 0; refIndex < c.nchr; ++refIndex) {
       auto &vars = variants_by_chr[refIndex];
       if (vars.empty()) continue;
@@ -813,18 +894,6 @@ namespace cameo {
 	psv->clear();
       }
 
-      // Update genome-wide PS values
-      if (!variants_by_chr[refIndex].empty()) {
-	uint32_t newChrPsVal = lastChrPsVal;
-	for(uint32_t i = 0; i < variants_by_chr[refIndex].size(); ++i) {
-	  if (variants_by_chr[refIndex][i].hap != -1) {
-	    variants_by_chr[refIndex][i].ps += lastChrPsVal;
-	    newChrPsVal = variants_by_chr[refIndex][i].ps;
-	  }
-	}
-	lastChrPsVal = newChrPsVal;
-      }
-      
       std::cerr << '[' << boost::posix_time::to_simple_string(boost::posix_time::second_clock::local_time()) << "] Chromosome index " << (refIndex + 1) << " done (variants=" << vars.size() << ", chunks=" << nchunks << ")" << std::endl;
     }
 
@@ -859,7 +928,7 @@ namespace cameo {
       ("help,?", "show help message")
       ("genome,g", boost::program_options::value<boost::filesystem::path>(&c.genome), "genome fasta file")
       ("vcffile,f", boost::program_options::value<boost::filesystem::path>(&c.vcffile), "VCF/BCF file with variants")
-      ("base-qual,b", boost::program_options::value<uint16_t>(&c.minBaseQual)->default_value(10), "min. base quality")
+      ("base-qual,b", boost::program_options::value<uint16_t>(&c.minBaseQual)->default_value(1), "min. base quality")
       ("map-qual,q", boost::program_options::value<uint16_t>(&c.minMapQual)->default_value(1), "min. mapping quality")
       ("sample,s", boost::program_options::value<std::string>(&c.sampleName), "sample name")
       ("outfile,o", boost::program_options::value<boost::filesystem::path>(&c.outfile), "output phased BCF file")

@@ -208,8 +208,8 @@ namespace cameo
 	quality.resize(rec->core.l_qseq);
 	std::string sequence;
 	sequence.resize(rec->core.l_qseq);
-	uint8_t* seqptr = bam_get_seq(rec);
-	uint8_t* qualptr = bam_get_qual(rec);
+	uint8_t const* seqptr = bam_get_seq(rec);
+	uint8_t const* qualptr = bam_get_qual(rec);
 	for (int32_t i = 0; i < rec->core.l_qseq; ++i) {
 	  quality[i] = qualptr[i];
 	  sequence[i] = "=ACMGRSVTWYHKDBN"[bam_seqi(seqptr, i)];
@@ -293,7 +293,7 @@ namespace cameo
 	// Parse cigar
 	uint32_t rp = rec->core.pos; // reference pointer
 	uint32_t sp = 0; // sequence pointer
-	uint32_t* cigar = bam_get_cigar(rec);
+	uint32_t const* cigar = bam_get_cigar(rec);
 	for (std::size_t i = 0; i < rec->core.n_cigar; ++i) {
 	  uint32_t op = bam_cigar_op(cigar[i]);
 	  uint32_t oplen = bam_cigar_oplen(cigar[i]);
@@ -453,7 +453,7 @@ namespace cameo
       if (c.hasBedFile) {
 	// BED file
 	for(uint32_t i = 0; i < scanRegions[refIndex].size(); ++i) {
-	  if ((scanRegions[refIndex][i].start >= 0) && (scanRegions[refIndex][i].end <= hdr->target_len[refIndex])) {
+	  if (scanRegions[refIndex][i].end <= hdr->target_len[refIndex]) {
 	    // Aggregate mod counts
 	    uint32_t reg_unmod_plus = 0;
 	    uint32_t reg_unmod_minus = 0;

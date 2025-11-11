@@ -22,7 +22,7 @@ namespace cameo {
     std::condition_variable condition;
     std::condition_variable condition_finished;
 
-    ThreadPool(size_t numThreads) : stop(false), active(0) {
+    explicit ThreadPool(size_t numThreads) : stop(false), active(0) {
       for (size_t i = 0; i < numThreads; ++i) {
 	workers.emplace_back([this]() {
 	  for (;;) {

@@ -1,4 +1,4 @@
-# Cameo: Cancer Analysis of Methylation
+# Cameo: Cancer Genome Analysis
 
 ## Installing cameo
 

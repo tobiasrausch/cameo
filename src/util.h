@@ -20,12 +20,6 @@
 namespace cameo
 {
 
-  inline int32_t mdv(std::vector<int32_t> &v) {
-    std::size_t n = v.size() / 2;
-    std::nth_element(v.begin(), v.begin()+n, v.end());
-    return v[n];
-  }
-  
   inline uint32_t
   infixStart(EdlibAlignResult const& cigar) {
     int32_t tIdx = cigar.endLocations[0];
@@ -131,23 +125,7 @@ namespace cameo
     }
     std::cerr << std::endl;
   }
-
   
-  template<typename TConfig>
-  inline void
-  checkSampleNames(TConfig& c) {
-    uint32_t ucount = 0;
-    std::set<std::string> snames;
-    for(unsigned int file_c = 0; file_c < c.files.size(); ++file_c) {
-      while (snames.find(c.sampleName[file_c]) != snames.end()) {
-	std::cerr << "Warning: Duplicate sample names: " << c.sampleName[file_c] << std::endl;
-	c.sampleName[file_c] += "_" + boost::lexical_cast<std::string>(ucount++);
-	std::cerr << "Warning: Changing sample name to " << c.sampleName[file_c] << std::endl;
-      }
-      snames.insert(c.sampleName[file_c]);
-    }
-  }
-
   // Output directory/file checks
   inline bool
   _outfileValid(boost::filesystem::path const& outfile) {
@@ -175,29 +153,6 @@ namespace cameo
       return false;
     }
     return true;
-  }
-
-
-  inline uint32_t sequenceLength(bam1_t const* rec) {
-    const uint32_t* cigar = bam_get_cigar(rec);
-    uint32_t slen = 0;
-    for (uint32_t i = 0; i < rec->core.n_cigar; ++i)
-      if ((bam_cigar_op(cigar[i]) == BAM_CMATCH) || (bam_cigar_op(cigar[i]) == BAM_CEQUAL) || (bam_cigar_op(cigar[i]) == BAM_CDIFF) || (bam_cigar_op(cigar[i]) == BAM_CINS) || (bam_cigar_op(cigar[i]) == BAM_CSOFT_CLIP) || (bam_cigar_op(cigar[i]) == BAM_CHARD_CLIP)) slen += bam_cigar_oplen(cigar[i]);
-    return slen;
-  }
-
-  inline int32_t
-  readLength(bam1_t const* rec) {
-    //int32_t slen = rec->core.l_qseq;  # Incorrect for seq. with hard-clips
-    return sequenceLength(rec);
-  }
-    
-  inline uint32_t alignmentLength(bam1_t const* rec) {
-    const uint32_t* cigar = bam_get_cigar(rec);
-    uint32_t alen = 0;
-    for (uint32_t i = 0; i < rec->core.n_cigar; ++i)
-      if ((bam_cigar_op(cigar[i]) == BAM_CMATCH) || (bam_cigar_op(cigar[i]) == BAM_CEQUAL) || (bam_cigar_op(cigar[i]) == BAM_CDIFF) || (bam_cigar_op(cigar[i]) == BAM_CDEL) || (bam_cigar_op(cigar[i]) == BAM_CREF_SKIP)) alen += bam_cigar_oplen(cigar[i]);
-    return alen;
   }
 
   inline unsigned hash_string(const char *s) {

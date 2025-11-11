@@ -391,7 +391,8 @@ namespace cameo {
     blocks.push_back(std::make_pair(block_start, B - 1));
 
     // Process blocks
-    int current_ps_id = 1;
+    int current_ps_id = chunk_vars[0].pos;
+    if (current_ps_id == 0) current_ps_id = 1;
     for (auto const& blk : blocks) {
       int s = blk.first;
       int e = blk.second;
@@ -609,6 +610,7 @@ namespace cameo {
       int32_t dominantPS = 0;      
       for (std::size_t i = sidx; i < eidx; ++i) {
 	const Variant &v = vars[i];
+	if (v.hap == -1) continue;
 	int read_offset = -1;
 
 	// Parse cigar
@@ -641,11 +643,11 @@ namespace cameo {
 	  if (sequence.substr(read_offset, REF.size()) == REF) {
 	    if (v.hap == 0) ++hapCount[0];
 	    else ++hapCount[1];
-	    dominantPS = vars[i].ps;
+	    if (dominantPS == 0) dominantPS = v.ps;
 	  } else if (sequence.substr(read_offset, ALT.size()) == ALT) {
 	    if (v.hap == 0) ++hapCount[1];
 	    else ++hapCount[0];
-	    dominantPS = vars[i].ps;
+	    if (dominantPS == 0) dominantPS = v.ps;
 	  }
 	}
       }
@@ -714,7 +716,7 @@ namespace cameo {
     uint32_t ptr = 0;
     bcf1_t* rec = bcf_init();
     while (bcf_read(ibcffile, bcfhdr, rec) == 0) {
-      bcf_unpack(rec, BCF_UN_STR);
+      bcf_unpack(rec, BCF_UN_ALL);
 
       // New chromosome?
       if (rec->rid != lastRefIdx) {
@@ -771,6 +773,117 @@ namespace cameo {
     // Close output file
     bcf_close(out_vcf);
     if (c.outfile.string() != "-") bcf_index_build(c.outfile.string().c_str(), 14);
+  }
+
+  inline void
+  stitchMerge(std::vector<Variant>& vars, int nchunks, int chunk_size, int chunk_overlap, std::unordered_map<int, int> const& global_pos_to_idx, std::vector<std::shared_ptr<std::vector<int>>> const& chunk_haps, std::vector<std::shared_ptr<std::vector<int>>> const& chunk_positions, std::vector<std::shared_ptr<std::vector<int>>> const& chunk_psids) {
+    if (vars.empty()) return;
+    int32_t global_ps_counter = 1;
+
+    for (int chunk_id = 0; chunk_id < nchunks; ++chunk_id) {
+      auto hp = chunk_haps[chunk_id];
+      auto posv = chunk_positions[chunk_id];
+      auto psv = chunk_psids[chunk_id];
+      if ((!hp) || (hp->empty())) continue;
+      int chunk_start = chunk_id * chunk_size;
+      
+      // Find variants in overlap region with previous chunk
+      std::vector<int> overlap_gidx;
+      if (chunk_id > 0) {
+        int overlap_start = chunk_start;
+        int overlap_end = chunk_start + chunk_overlap;
+        for (uint32_t k = 0; k < posv->size(); ++k) {
+          int gpos = (*posv)[k];
+          if (gpos >= overlap_start && gpos < overlap_end) {
+            auto it = global_pos_to_idx.find(gpos);
+            if (it != global_pos_to_idx.end()) overlap_gidx.push_back(it->second);
+          }
+        }
+      }
+
+      // Check consistency
+      std::map<int32_t, int32_t> ps_map;
+      std::map<int32_t, bool> ps_flip;
+      if (!overlap_gidx.empty()) {
+        std::map<int32_t, std::pair<int, int>> ps_votes; // ps_id -> {agree, disagree}
+        for(int gidx : overlap_gidx) {
+	  int local_idx = -1;
+	  for(size_t i=0; i<posv->size(); ++i) {
+	    if ((*posv)[i] == vars[gidx].pos) {
+	      local_idx = i;
+	      break;
+	    }
+	  }
+
+	  if ((local_idx != -1) && (vars[gidx].hap != -1) && ((*hp)[local_idx] != -1)) {
+	    int32_t prev_ps = vars[gidx].ps;
+	    int32_t curr_ps = (*psv)[local_idx];
+	    if (prev_ps != 0) {
+	      if (vars[gidx].hap == (*hp)[local_idx]) {
+		++ps_votes[curr_ps].first;
+	      } else {
+		++ps_votes[curr_ps].second;
+	      }
+	    }
+	  }
+        }
+        for(auto const& kv : ps_votes) {
+	  if (kv.second.first + kv.second.second > 2) {
+	    auto it_gidx = std::find_if(overlap_gidx.begin(), overlap_gidx.end(), [&](int gidx){
+	      return vars[gidx].ps == kv.first;
+	    });
+	    if(it_gidx != overlap_gidx.end()) {
+	      int32_t representative_prev_ps = vars[*it_gidx].ps;
+	      if (kv.second.first >= kv.second.second) { // Stitch
+		ps_map[kv.first] = representative_prev_ps;
+		ps_flip[kv.first] = false;
+	      } else { // Stitch but flip
+		ps_map[kv.first] = representative_prev_ps;
+		ps_flip[kv.first] = true;
+	      }
+	    }
+	  }
+        }
+      }
+
+      // Update variants in the current chunk
+      for (size_t k = 0; k < posv->size(); ++k) {
+        int gpos = (*posv)[k];
+        if (gpos < chunk_start + chunk_overlap && chunk_id > 0) continue; // Skip overlap except for first chunk
+	
+        auto it = global_pos_to_idx.find(gpos);
+        if (it != global_pos_to_idx.end()) {
+          int gidx = it->second;
+          int32_t current_ps = (*psv)[k];
+          int current_hap = (*hp)[k];
+	  
+          if (current_hap != -1) {
+            auto map_it = ps_map.find(current_ps);
+            if (map_it != ps_map.end()) { // Stitch
+              vars[gidx].ps = map_it->second;
+              vars[gidx].hap = ps_flip[current_ps] ? 1 - current_hap : current_hap;
+            } else { // New block
+              vars[gidx].ps = current_ps;
+              vars[gidx].hap = current_hap;
+            }
+          } else {
+            vars[gidx].hap = -1;
+            vars[gidx].ps = 0;
+          }
+        }
+      }
+    }
+
+    // Final pass: remap all PS IDs to be globally sequential
+    std::map<int32_t, int32_t> final_ps_map;
+    for(auto& var : vars) {
+      if (var.hap != -1 && var.ps != 0) {
+        if (final_ps_map.find(var.ps) == final_ps_map.end()) {
+          final_ps_map[var.ps] = global_ps_counter++;
+        }
+        var.ps = final_ps_map[var.ps];
+      }
+    }
   }
   
   template<typename TConfig>
@@ -849,25 +962,8 @@ namespace cameo {
       }
       pool.waitAll();
 
-      // Merge chunk
-      for (int chunk_id = 0; chunk_id < nchunks; ++chunk_id) {
-	auto hp = chunk_haps[chunk_id];
-	auto posv = chunk_positions[chunk_id];
-	auto psv = chunk_psids[chunk_id];
-	if (!hp || !posv || !psv) continue;
-	for (size_t k = 0; k < posv->size(); ++k) {
-	  int gpos = (*posv)[k];
-	  auto it = global_pos_to_idx.find(gpos);
-	  if (it != global_pos_to_idx.end()) {
-	    int gidx = it->second;
-	    variants_by_chr[refIndex][gidx].hap = (*hp)[k];
-	    variants_by_chr[refIndex][gidx].ps = (*psv)[k];
-	  }
-	}
-	hp->clear();
-	posv->clear();
-	psv->clear();
-      }
+      // Merge
+      stitchMerge(variants_by_chr[refIndex], nchunks, c.chunkSize, c.chunkOverlap, global_pos_to_idx, chunk_haps, chunk_positions, chunk_psids);
 
       std::cerr << '[' << boost::posix_time::to_simple_string(boost::posix_time::second_clock::local_time()) << "] Chromosome index " << (refIndex + 1) << " done (variants=" << vars.size() << ", chunks=" << nchunks << ")" << std::endl;
     }

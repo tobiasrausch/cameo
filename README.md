@@ -34,6 +34,16 @@ To identify (de)methylated regions in a BAM file:
 
 `cameo pileup -cpk -g hg38.fa input.bam`
 
+## Phasing
+
+To identify allele-specific methylation, you first need to phase heterozygous variants using the phase subcommand:
+
+`cameo phase -o out.bcf -g hg38.fa -f input.vcf.gz input.bam`
+
+This command can also haplotype tag input reads and write a tagged BAM file.
+
+`cameo phase -o out.bcf -d out.bam -g hg38.fa -f input.vcf.gz input.bam`
+
 ## Credits
 
 [HTSlib](https://github.com/samtools/htslib) is heavily used for alignment processing and [Boost](https://www.boost.org/) for various data structures and algorithms.

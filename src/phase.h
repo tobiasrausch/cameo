@@ -535,6 +535,10 @@ namespace cameo {
 	if (h2_ref + h2_alt > 0) final_h2[i] = (h2_alt > h2_ref) ? 1 : 0;
       }
       for (int i = 0; i < block_size; ++i) {
+	// Fill-in missing alleles
+	if ((final_h1[i] != -1) && (final_h2[i] == -1)) final_h2[i] = 1 - final_h1[i];
+	else if ((final_h1[i] == -1) && (final_h2[i] != -1)) final_h1[i] = 1 - final_h2[i];
+	
 	// Valid het. variant?
         if ((final_h1[i] != -1) && (final_h2[i] != -1) && (final_h1[i] != final_h2[i])) {
           out_hap[s + i] = final_h1[i];
@@ -866,16 +870,17 @@ namespace cameo {
         }
         for(uint32_t k = 0; k < posv->size(); ++k) {
           int gpos = (*posv)[k];
-          if ((chunk_id > 0) && (gpos < chunk_start)) continue;
+          //if ((chunk_id > 0) && (gpos < chunk_start)) continue;
           auto it = global_pos_to_idx.find(gpos);
           if (it != global_pos_to_idx.end()) {
+	    if(vars[it->second].ps != 0) continue;  // Skip already phased variants from the previous chunk
             int gidx = it->second;
             int32_t current_ps = (*psv)[k];
             int current_hap = (*hp)[k];
 
             if ((current_hap != -1) && (current_ps != 0)) {
               auto vote_it = ps_vote.find(current_ps);
-              if ((vote_it != ps_vote.end()) && (std::abs(vote_it->second) > 1)) {
+              if ((vote_it != ps_vote.end()) && (std::abs(vote_it->second) >= 1)) {
 		// Stitch
                 vars[gidx].ps = ps_target[current_ps];
                 vars[gidx].hap = (vote_it->second > 0) ? current_hap : 1 - current_hap;

@@ -46,12 +46,10 @@ namespace cameo {
     uint16_t minBaseQual;
     uint16_t minMapQual;
     uint32_t maxThreads;
-    uint32_t minOverlapVar;
     uint32_t maxReadsPerChunk;
     uint32_t maxIter;
     uint32_t minReadsPerBlock;
     int32_t nchr;
-    int32_t minCov;
     int32_t chunkSize;
     int32_t chunkOverlap;
     boost::filesystem::path outfile;
@@ -335,13 +333,13 @@ namespace cameo {
       bam_hdr_destroy(hdr);
       sam_close(samfile);
     
-      // Remove reads that do not cover enough variants and downsample (if needed)
+      // Remove reads that do not overlap >=2 variants and downsample (if needed)
       std::vector<std::pair<uint32_t, std::size_t> > varCounts;
       for(typename TReadMap::iterator it = readTmp.begin(); it != readTmp.end(); ++it) varCounts.push_back(std::make_pair(it->second.mask.count(), it->first));
       std::sort(varCounts.begin(), varCounts.end(), std::greater<>());
       uint32_t rcount = 0;
       for(uint32_t i = 0; i < varCounts.size(); ++i) {
-	if (varCounts[i].first >= c.minOverlapVar) {
+	if (varCounts[i].first >= 2) {
 	  if (rcount < c.maxReadsPerChunk) {
 	    out_reads[varCounts[i].second] = readTmp[varCounts[i].second];
 	    ++rcount;
@@ -952,10 +950,8 @@ namespace cameo {
     
     boost::program_options::options_description phasing("Phasing options");
     phasing.add_options()
-      ("mincov,c", boost::program_options::value<int32_t>(&c.minCov)->default_value(10), "min. variant coverage")
       ("chunksize,u", boost::program_options::value<int32_t>(&c.chunkSize)->default_value(1000000), "chunk size")
       ("chunkoverlap,l", boost::program_options::value<int32_t>(&c.chunkOverlap)->default_value(50000), "chunk overlap")
-      ("minoverlap,p", boost::program_options::value<uint32_t>(&c.minOverlapVar)->default_value(3), "min. variants spanned by a read")
       ("maxiter,m", boost::program_options::value<uint32_t>(&c.maxIter)->default_value(50), "max. iterations per block")
       ("minreadsperblock,n", boost::program_options::value<uint32_t>(&c.minReadsPerBlock)->default_value(2), "min. reads per block")
       ("maxreadsperchunk,r", boost::program_options::value<uint32_t>(&c.maxReadsPerChunk)->default_value(10000), "max. reads per chunk")

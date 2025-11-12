@@ -252,7 +252,7 @@ namespace cameo {
       bam1_t* rec = bam_init1();
       int numVars = chunk_vars.size();
       while (sam_itr_next(samfile, itr, rec) >= 0) {
-        if (rec->core.flag & (BAM_FSECONDARY | BAM_FQCFAIL | BAM_FDUP | BAM_FSUPPLEMENTARY | BAM_FUNMAP)) continue;
+        if (rec->core.flag & (BAM_FQCFAIL | BAM_FDUP | BAM_FUNMAP)) continue;
         if ((rec->core.l_qseq <= 0) || (rec->core.qual < c.minMapQual) || (rec->core.tid<0)) continue;
 	
 	// Get read sequence
@@ -270,7 +270,7 @@ namespace cameo {
 	
 	// Add ReadInfo
 	std::size_t seed = hash_lr(bam_get_qname(rec));
-	readTmp[seed] = ReadInfo(numVars);
+	if (readTmp.find(seed) == readTmp.end()) readTmp[seed] = ReadInfo(numVars);
 	ReadInfo &ri = readTmp[seed];
 
 	// Parse cigar
@@ -322,6 +322,8 @@ namespace cameo {
 	    gp += bam_cigar_oplen(cigar[ci]);
 	  } else if (bam_cigar_op(cigar[ci]) == BAM_CSOFT_CLIP) {
 	    sp += bam_cigar_oplen(cigar[ci]);
+	  } else if (bam_cigar_op(cigar[ci]) == BAM_CHARD_CLIP) {
+	    // No shift for sp
 	  }
         }
       }

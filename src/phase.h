@@ -103,20 +103,30 @@ namespace cameo {
   }
   
   inline int
-  _bestAllele(std::string const& readSeq, int read_offset, std::string const& REF, std::string const& ALT) {
-    int buffer = 25;
-    int maxEdit = 2;
-    if ((read_offset < 0) || (read_offset >= (int)readSeq.size())) return -1;
-    int s = std::max(0, read_offset - buffer);
-    int e = std::min((int) readSeq.size(), (int) (read_offset + std::max(REF.size(), ALT.size()) + buffer));
-    if (s >= e) return -1;
-    std::string q = readSeq.substr(s, e - s);
-    EdlibAlignResult rRef = edlibAlign(REF.c_str(), (int)REF.size(), q.c_str(), (int)q.size(), edlibNewAlignConfig(maxEdit, EDLIB_MODE_HW, EDLIB_TASK_DISTANCE, NULL, 0));
-    EdlibAlignResult rAlt = edlibAlign(ALT.c_str(), (int)ALT.size(), q.c_str(), (int)q.size(), edlibNewAlignConfig(maxEdit, EDLIB_MODE_HW, EDLIB_TASK_DISTANCE, NULL, 0));
+  _bestAllele(std::string const& sequence, int sp, char const* seq, int gp, std::string const& REF, std::string const& ALT) {
+    int buffer = 50;
+    int maxEdit = 10;
+    int32_t diff = std::abs((int) ALT.size() - (int) REF.size());
+    if ((sp < buffer) || (gp < buffer) || (sp + diff + buffer > (int) sequence.size())) return -1;
+    std::string ALTEXT;
+    std::string REFEXT;
+    if (REF.size() <= ALT.size()) {
+      // Insertion
+      ALTEXT = ALT + std::string(seq + gp + REF.size() - buffer, seq + gp + REF.size() + buffer);
+      REFEXT = REF + std::string(seq + gp + REF.size() - buffer, seq + gp + REF.size() + diff + buffer);
+    } else {
+      // Deletion
+      ALTEXT = ALT + std::string(seq + gp + REF.size() - buffer, seq + gp + REF.size() + diff + buffer);
+      REFEXT = REF + std::string(seq + gp + REF.size() - buffer, seq + gp + REF.size() + buffer);
+    }
+    std::string query = sequence.substr(sp - buffer, diff + 2*buffer + 1);
+    EdlibAlignResult rRef = edlibAlign(REFEXT.c_str(), REFEXT.size(), query.c_str(), query.size(), edlibNewAlignConfig(maxEdit, EDLIB_MODE_NW, EDLIB_TASK_DISTANCE, NULL, 0));
+    EdlibAlignResult rAlt = edlibAlign(ALTEXT.c_str(), ALTEXT.size(), query.c_str(), query.size(), edlibNewAlignConfig(maxEdit, EDLIB_MODE_NW, EDLIB_TASK_DISTANCE, NULL, 0));
     int dRef = rRef.editDistance;
     int dAlt = rAlt.editDistance;
     edlibFreeAlignResult(rRef);
     edlibFreeAlignResult(rAlt);
+    //std::cerr << ALTEXT.size() << ',' << REFEXT.size() << ',' << query.size() << ',' << dRef << ',' << dAlt << std::endl;
     
     // Confident ALT or REF call?
     if ((dRef < 0) && (dAlt < 0)) return -1;
@@ -195,11 +205,14 @@ namespace cameo {
 	if ((a0 == a1) || (a0 < 0) || (a1 < 0) || (!((a0==0 && a1==1) || (a0==1 && a1==0)))) continue;
 	if (rec->pos != lastpos) {
 	  std::string rAllele = std::string(rec->d.allele[0]);
+	  std::string aAllele = std::string(rec->d.allele[1]);
 	  if (rAllele != boost::to_upper_copy(std::string(seq + rec->pos, seq + rec->pos + rAllele.size()))) {
 	    std::cerr << "Warning: REF allele mismatch at " << hdr->target_name[refIndex] << ":" << (rec->pos + 1) << std::endl;
 	  } else {
-	    variants_by_chr[refIndex].push_back(Variant(rec->pos, std::string(rec->d.allele[0]), std::string(rec->d.allele[1])));
-	    ++kept;
+	    if (aAllele[0] != '*') {
+	      variants_by_chr[refIndex].push_back(Variant(rec->pos, rAllele, aAllele));
+	      ++kept;
+	    }
 	  }
 	  lastpos = rec->pos;
 	}
@@ -277,43 +290,43 @@ namespace cameo {
 	uint32_t const* cigar = bam_get_cigar(rec);
         for (uint32_t ci = 0; ci < rec->core.n_cigar; ++ci) {
 	  if ((bam_cigar_op(cigar[ci]) == BAM_CMATCH) || (bam_cigar_op(cigar[ci]) == BAM_CEQUAL) || (bam_cigar_op(cigar[ci]) == BAM_CDIFF)) {
-	    for (uint32_t i = 0; i < bam_cigar_oplen(cigar[ci]); ++i) {
-	      int rp = gp + i;
-	      if ((rp < chunk_genomic_start) || (rp >= chunk_genomic_end)) continue;
-	      auto itpos = pos_to_local.find(rp);
+	    for (uint32_t i = 0; i < bam_cigar_oplen(cigar[ci]); ++i, ++gp, ++sp) {
+	      if ((gp < chunk_genomic_start) || (gp >= chunk_genomic_end)) continue;
+	      auto itpos = pos_to_local.find(gp);
 	      if (itpos == pos_to_local.end()) continue;
 	      int local = itpos->second;
-	      int qi = sp + i;
-	      if ((qi < 0) || (qi >= rec->core.l_qseq)) continue;
-	      if (quality[qi] < c.minBaseQual) continue;
+	      if ((sp < 0) || (sp >= rec->core.l_qseq)) continue;
+	      if (quality[sp] < c.minBaseQual) continue;
 	      std::string const& REF = chunk_vars[local].ref;
 	      std::string const& ALT = chunk_vars[local].alt;
 	      int call = -1;
 	      if ((ALT.size() == 1) && (REF.size() == 1)) {
 		// SNP
-		if ((sequence[qi] == REF[0]) && (sequence[qi] != ALT[0])) call = 0;
-		else if ((sequence[qi] != REF[0]) && (sequence[qi] == ALT[0])) call = 1;
+		if ((sequence[sp] == REF[0]) && (sequence[sp] != ALT[0])) call = 0;
+		else if ((sequence[sp] != REF[0]) && (sequence[sp] == ALT[0])) call = 1;
 	      } else {
 		if (REF.size() <= ALT.size()) {
 		  // Insertion or MNP
 		  int32_t diff = ALT.size() - REF.size();
 		  std::string REFEXT = REF + std::string(seq + gp + REF.size(), seq + gp + REF.size() + diff);
-		  call = _bestAllele(sequence, qi, REFEXT, ALT);
+		  if ((sequence.substr(sp, ALT.size()) != ALT) && (sequence.substr(sp, REFEXT.size()) == REFEXT)) call = 0;
+		  else if ((sequence.substr(sp, ALT.size()) == ALT) && (sequence.substr(sp, REFEXT.size()) != REFEXT)) call = 1;
+		  else call = _bestAllele(sequence, sp, seq, gp, REF, ALT);
 		} else {
 		  // Deletion
 		  int32_t diff = REF.size() - ALT.size();
 		  std::string ALTEXT = ALT + std::string(seq + gp + REF.size(), seq + gp + REF.size() + diff);
-		  call = _bestAllele(sequence, qi, REF, ALTEXT);
+		  if ((sequence.substr(sp, ALTEXT.size()) != ALTEXT) && (sequence.substr(sp, REF.size()) == REF)) call = 0;
+		  else if ((sequence.substr(sp, ALTEXT.size()) == ALTEXT) && (sequence.substr(sp, REF.size()) != REF)) call = 1;
+		  else call = _bestAllele(sequence, sp, seq, gp, REF, ALT);
 		}
 	      }
 	      if (call != -1) {
 		ri.mask[local] = true;
 		ri.alt[local] = call;
-		ri.bq[local] = quality[qi];
+		ri.bq[local] = quality[sp];
 	      }
 	    }
-	    gp += bam_cigar_oplen(cigar[ci]);
-	    sp += bam_cigar_oplen(cigar[ci]);
 	  } else if (bam_cigar_op(cigar[ci]) == BAM_CINS) {
 	    sp += bam_cigar_oplen(cigar[ci]);
 	  } else if ((bam_cigar_op(cigar[ci]) == BAM_CDEL) || (bam_cigar_op(cigar[ci]) == BAM_CREF_SKIP)) {

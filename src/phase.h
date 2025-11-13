@@ -725,7 +725,8 @@ namespace cameo {
     sam_close(samfile);
     sam_close(out);
 
-    std::cerr << '[' << boost::posix_time::to_simple_string(boost::posix_time::second_clock::local_time()) << "] Haplotagged " << nTagged << "/" << nTotal << " reads." << std::endl;
+    double tagperc = ((double) nTagged * 100.0) / (double) nTotal;
+    std::cerr << '[' << boost::posix_time::to_simple_string(boost::posix_time::second_clock::local_time()) << "] Haplotagged " << nTagged << " out of " << nTotal << " (" << tagperc << "%) reads." << std::endl;
 }
 
 
@@ -811,6 +812,11 @@ namespace cameo {
     bcf_destroy(rec);
     bcf_hdr_destroy(bcfhdr);
     bcf_close(ibcffile);
+
+    // Close BAM
+    bam_hdr_destroy(hdr);
+    sam_close(samfile);
+    
     // Close output file
     bcf_close(out_vcf);
     if (c.outfile.string() != "-") bcf_index_build(c.outfile.string().c_str(), 14);

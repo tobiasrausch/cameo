@@ -101,40 +101,31 @@ namespace cameo {
     if (q > cap) q = cap;
     return std::pow(10.0, -q / 10.0);
   }
-  
+
   inline int
   _bestAllele(std::string const& sequence, int sp, char const* seq, int gp, std::string const& REF, std::string const& ALT) {
-    int buffer = 50;
-    int maxEdit = 10;
-    int32_t diff = std::abs((int) ALT.size() - (int) REF.size());
-    if ((sp < buffer) || (gp < buffer) || (sp + diff + buffer > (int) sequence.size())) return -1;
-    std::string ALTEXT;
-    std::string REFEXT;
-    if (REF.size() <= ALT.size()) {
-      // Insertion
-      ALTEXT = ALT + std::string(seq + gp + REF.size() - buffer, seq + gp + REF.size() + buffer);
-      REFEXT = REF + std::string(seq + gp + REF.size() - buffer, seq + gp + REF.size() + diff + buffer);
-    } else {
-      // Deletion
-      ALTEXT = ALT + std::string(seq + gp + REF.size() - buffer, seq + gp + REF.size() + diff + buffer);
-      REFEXT = REF + std::string(seq + gp + REF.size() - buffer, seq + gp + REF.size() + buffer);
-    }
-    std::string query = sequence.substr(sp - buffer, diff + 2*buffer + 1);
-    EdlibAlignResult rRef = edlibAlign(REFEXT.c_str(), REFEXT.size(), query.c_str(), query.size(), edlibNewAlignConfig(maxEdit, EDLIB_MODE_NW, EDLIB_TASK_DISTANCE, NULL, 0));
-    EdlibAlignResult rAlt = edlibAlign(ALTEXT.c_str(), ALTEXT.size(), query.c_str(), query.size(), edlibNewAlignConfig(maxEdit, EDLIB_MODE_NW, EDLIB_TASK_DISTANCE, NULL, 0));
+    int buffer = 100;
+    int maxEdit = 15;
+    if ((sp < buffer) || (gp < buffer) || (sp + (int)REF.size() + buffer > (int)sequence.size())) return -1;
+    std::string query = sequence.substr(sp - buffer, REF.size() + 2 * buffer);
+    std::string ref_context = std::string(seq + gp - buffer, buffer) + REF + std::string(seq + gp + REF.size(), buffer);
+    std::string alt_context = std::string(seq + gp - buffer, buffer) + ALT + std::string(seq + gp + REF.size(), buffer);
+
+    // Align
+    EdlibAlignResult rRef = edlibAlign(query.c_str(), query.size(), ref_context.c_str(), ref_context.size(), edlibNewAlignConfig(maxEdit, EDLIB_MODE_HW, EDLIB_TASK_DISTANCE, NULL, 0));
+    EdlibAlignResult rAlt = edlibAlign(query.c_str(), query.size(), alt_context.c_str(), alt_context.size(), edlibNewAlignConfig(maxEdit, EDLIB_MODE_HW, EDLIB_TASK_DISTANCE, NULL, 0));
     int dRef = rRef.editDistance;
     int dAlt = rAlt.editDistance;
     edlibFreeAlignResult(rRef);
     edlibFreeAlignResult(rAlt);
-    //std::cerr << ALTEXT.size() << ',' << REFEXT.size() << ',' << query.size() << ',' << dRef << ',' << dAlt << std::endl;
-    
-    // Confident ALT or REF call?
+
+    // Call
     if ((dRef < 0) && (dAlt < 0)) return -1;
-    if ((dRef >= 0) && (dRef <= maxEdit) && ((dAlt < 0) || (dRef < dAlt))) return 0;
-    if ((dAlt >= 0) && (dAlt <= maxEdit) && ((dRef < 0) || (dAlt < dRef))) return 1;
+    if ((dRef >= 0) && ((dAlt < 0) || (dRef < dAlt))) return 0;
+    if ((dAlt >= 0) && ((dRef < 0) || (dAlt < dRef))) return 1;
     return -1;
   }
-
+  
   template<typename TConfig>
   inline void
   parseVcfVariants(TConfig const& c, std::vector<std::vector<Variant>>& variants_by_chr) {

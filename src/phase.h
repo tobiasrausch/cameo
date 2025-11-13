@@ -573,6 +573,10 @@ namespace cameo {
         for (auto const &v : vars) posIndex[refIndex].push_back(v.pos);
     }
 
+    // Parse BAM
+    faidx_t* fai = fai_load(c.genome.string().c_str());
+    char* seq = NULL;
+    int lastIdx = -1;
     uint32_t nTagged = 0;
     uint32_t nTotal = 0;
     bam1_t *rec = bam_init1();
@@ -600,6 +604,21 @@ namespace cameo {
 	if (sam_write1(out, hdr, rec) < 0) std::cerr << "Warning: Could not write BAM record!" << std::endl;
 	continue;
       }
+
+      // Lazy genome sequence loading
+      if (rec->core.tid != lastIdx) {
+	if (seq != NULL) {
+	  free(seq);
+	  seq = NULL;
+	}
+	int32_t seqlen = -1;
+	std::string chrom(hdr->target_name[rec->core.tid]);
+	seq = faidx_fetch_seq(fai, chrom.c_str(), 0, hdr->target_len[rec->core.tid], &seqlen);
+	if (seqlen <= 0) std::cerr << "Warning: Chromosome does not exist in FASTA genome file: " << chrom << std::endl;
+	lastIdx = rec->core.tid;
+      }
+
+      // Variant indices
       std::size_t sidx = lb - posIndex[rec->core.tid].begin();
       std::size_t eidx = ub - posIndex[rec->core.tid].begin();
       if (eidx > vars.size()) eidx = vars.size();
@@ -616,7 +635,8 @@ namespace cameo {
       for (std::size_t i = sidx; i < eidx; ++i) {
 	const Variant &v = vars[i];
 	if (v.hap == -1) continue;
-	int read_offset = -1;
+	int rpos = -1;
+	int gpos = -1;
 
 	// Parse cigar
 	uint32_t const* cigar = bam_get_cigar(rec);
@@ -627,7 +647,8 @@ namespace cameo {
 	  int len = bam_cigar_oplen(cigar[k]);
 	  if (op == BAM_CMATCH || op == BAM_CEQUAL || op == BAM_CDIFF) {
 	    if ((v.pos >= gp) && (v.pos < gp + len)) {
-	      read_offset = sp + (v.pos - gp);
+	      rpos = sp + (v.pos - gp);
+	      gpos = gp + (v.pos - gp);
 	      break;
 	    }
 	    gp += len;
@@ -638,21 +659,48 @@ namespace cameo {
 	    gp += len;
 	  } else if (op == BAM_CSOFT_CLIP) {
 	    sp += len;
+	  } else if (op == BAM_CHARD_CLIP) {
+	    // No shift for sp
 	  }
 	}
 
 	// Count HP support
-	if ((read_offset >= 0) && (read_offset < rec->core.l_qseq)) {
-	  std::string REF = v.ref;
-	  std::string ALT = v.alt;
-	  if (sequence.substr(read_offset, REF.size()) == REF) {
-	    if (v.hap == 0) ++hapCount[0];
-	    else ++hapCount[1];
-	    if (dominantPS == 0) dominantPS = v.ps;
-	  } else if (sequence.substr(read_offset, ALT.size()) == ALT) {
-	    if (v.hap == 0) ++hapCount[1];
-	    else ++hapCount[0];
-	    if (dominantPS == 0) dominantPS = v.ps;
+	if ((rpos >= 0) && (rpos < rec->core.l_qseq) && (gpos < (int) hdr->target_len[rec->core.tid])) {
+	  std::string const& REF = v.ref;
+	  std::string const& ALT = v.alt;
+	  int call = -1;
+	  if ((ALT.size() == 1) && (REF.size() == 1)) {
+	    // SNP
+	    if ((sequence[rpos] == REF[0]) && (sequence[rpos] != ALT[0])) call = 0;
+	    else if ((sequence[rpos] != REF[0]) && (sequence[rpos] == ALT[0])) call = 1;
+	  } else {
+	    if (REF.size() <= ALT.size()) {
+	      // Insertion or MNP
+	      int32_t diff = ALT.size() - REF.size();
+	      std::string REFEXT = REF + std::string(seq + gpos + REF.size(), seq + gpos + REF.size() + diff);
+	      if ((sequence.substr(rpos, ALT.size()) != ALT) && (sequence.substr(rpos, REFEXT.size()) == REFEXT)) call = 0;
+	      else if ((sequence.substr(rpos, ALT.size()) == ALT) && (sequence.substr(rpos, REFEXT.size()) != REFEXT)) call = 1;
+	      else call = _bestAllele(sequence, rpos, seq, gpos, REF, ALT);
+	    } else {
+	      // Deletion
+	      int32_t diff = REF.size() - ALT.size();
+	      std::string ALTEXT = ALT + std::string(seq + gpos + REF.size(), seq + gpos + REF.size() + diff);
+	      if ((sequence.substr(rpos, ALTEXT.size()) != ALTEXT) && (sequence.substr(rpos, REF.size()) == REF)) call = 0;
+	      else if ((sequence.substr(rpos, ALTEXT.size()) == ALTEXT) && (sequence.substr(rpos, REF.size()) != REF)) call = 1;
+	      else call = _bestAllele(sequence, rpos, seq, gpos, REF, ALT);
+	    }
+	  }
+	  if (call != -1) {
+	    if (call == 0) {
+	      // REF
+	      if (v.hap == 0) ++hapCount[0];
+	      else ++hapCount[1];
+	      if (dominantPS == 0) dominantPS = v.ps;
+	    } else if (call == 1) {
+	      if (v.hap == 0) ++hapCount[1];
+	      else ++hapCount[0];
+	      if (dominantPS == 0) dominantPS = v.ps;
+	    }
 	  }
 	}
       }
@@ -670,7 +718,8 @@ namespace cameo {
       }
       if (sam_write1(out, hdr, rec) < 0) std::cerr << "Warning: Could not write BAM record!" << std::endl;
     }
-
+    if (seq != NULL) free(seq);
+    fai_destroy(fai);
     bam_destroy1(rec);
     bam_hdr_destroy(hdr);
     sam_close(samfile);

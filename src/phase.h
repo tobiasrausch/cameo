@@ -582,7 +582,7 @@ namespace cameo {
     bam1_t *rec = bam_init1();
     while (sam_read1(samfile, hdr, rec) >= 0) {
       ++nTotal;
-      if (rec->core.flag & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY | BAM_FUNMAP)) {
+      if (rec->core.flag & (BAM_FQCFAIL | BAM_FDUP | BAM_FUNMAP)) {
 	if (sam_write1(out, hdr, rec) < 0) std::cerr << "Warning: Could not write BAM record!" << std::endl;
 	continue;
       }

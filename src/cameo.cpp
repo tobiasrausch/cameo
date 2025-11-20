@@ -17,6 +17,7 @@
 #include "threadpool.h"
 #include "util.h"
 #include "phase.h"
+#include "motif.h"
 #include "cameo.h"
 
 using namespace cameo;
@@ -27,7 +28,8 @@ displayUsage() {
   std::cerr << "Usage: cameo <command> <arguments>" << std::endl;
   std::cerr << std::endl;
   std::cerr << "    pileup        create methylation pileup table" << std::endl;
-  std::cerr << "    phase         phase variants using long reads" << std::endl;  
+  std::cerr << "    phase         phase variants using long reads" << std::endl;
+  std::cerr << "    motif         motif search" << std::endl;
   std::cerr << std::endl;
 }
 
@@ -59,6 +61,9 @@ int main(int argc, char **argv) {
     }
     else if ((std::string(argv[1]) == "phase")) {
       return phase(argc-1,argv+1);
+    }
+    else if ((std::string(argv[1]) == "motif")) {
+      return motif(argc-1,argv+1);
     }
     else if ((std::string(argv[1]) == "pileup")) {
       return pileup(argc-1,argv+1);
